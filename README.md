@@ -11,7 +11,8 @@ AynTex is a feature-rich, cross-platform LaTeX editor built with PyQt5. It is de
 
 ## Screenshots
 
-> _Add your screenshots here_
+<img width="1366" height="694" alt="image" src="https://github.com/user-attachments/assets/58308be0-65e7-46ba-97af-42c0f2f27187" />
+
 
 ---
 
