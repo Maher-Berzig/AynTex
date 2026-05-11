@@ -1,0 +1,892 @@
+# ============================================================================
+# FILE: plugins/function_plugin.py - FIXED VERSION
+# ============================================================================
+
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QLineEdit,
+    QDoubleSpinBox, QPushButton, QComboBox, QListWidget, QListWidgetItem,
+    QCheckBox, QSpinBox, QColorDialog, QGridLayout
+)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor
+import matplotlib.pyplot as plt
+import numpy as np
+from typing import Any, Dict, List, Tuple
+from tikz_plotter_tab import PlotPlugin
+
+
+class FunctionPlotPlugin(PlotPlugin):
+    """Mathematical function plotting plugin with multiple functions support"""
+    
+    name = "Function Plot"
+    version = "2.0.0"
+    category = "mathematical"
+    description = "Plot multiple mathematical functions with customization"
+    requires_custom_ui = True
+    
+    # Class-level constants
+    MARKER_OPTIONS = {
+        "None": "",
+        "Circle (o)": "o",
+        "Square (s)": "s",
+        "Triangle Up (^)": "^",
+        "Triangle Down (v)": "v",
+        "Diamond (D)": "D",
+        "Star (*)": "*",
+        "Plus (+)": "+",
+        "Cross (x)": "x",
+        "Point (.)": ".",
+    }
+    
+    LINESTYLE_OPTIONS = {
+        "Solid (-)": "-",
+        "Dashed (--)": "--",
+        "Dotted (:)": ":",
+        "Dash-Dot (-.)": "-.",
+        "None": "",
+    }
+    
+    COLOR_PRESETS = [
+        "blue", "red", "green", "orange", "purple",
+        "brown", "pink", "gray", "olive", "cyan"
+    ]
+    
+    FUNCTION_CATEGORIES = {
+        "Trigonometric": [
+            ("Sine", "np.sin(x)"),
+            ("Cosine", "np.cos(x)"),
+            ("Tangent", "np.tan(x)"),
+            ("Arcsin", "np.arcsin(x)"),
+            ("Arccos", "np.arccos(x)"),
+            ("Arctan", "np.arctan(x)"),
+            ("Sin²(x)", "np.sin(x)**2"),
+            ("Sinc", "np.sinc(x)"),
+        ],
+        "Polynomials": [
+            ("Linear", "2*x + 1"),
+            ("Parabola", "x**2"),
+            ("Cubic", "x**3"),
+            ("Quartic", "x**4"),
+            ("Quadratic", "x**2 - 4*x + 3"),
+            ("Polynomial", "x**3 - 3*x**2 + 2*x"),
+        ],
+        "Exponential/Log": [
+            ("Exponential", "np.exp(x)"),
+            ("Decay", "np.exp(-x)"),
+            ("Natural Log", "np.log(np.abs(x) + 0.01)"),
+            ("Log10", "np.log10(np.abs(x) + 0.01)"),
+            ("2^x", "2**x"),
+        ],
+        "Hyperbolic": [
+            ("Sinh", "np.sinh(x)"),
+            ("Cosh", "np.cosh(x)"),
+            ("Tanh", "np.tanh(x)"),
+        ],
+        "Special": [
+            ("Gaussian", "np.exp(-x**2)"),
+            ("Sigmoid", "1/(1 + np.exp(-x))"),
+            ("ReLU", "np.maximum(0, x)"),
+            ("Absolute", "np.abs(x)"),
+            ("Sign", "np.sign(x)"),
+            ("Damped Sine", "np.exp(-0.1*np.abs(x))*np.sin(x)"),
+        ],
+    }
+    
+    def __init__(self):
+        super().__init__()
+        # Data storage (persists across UI rebuilds)
+        self.functions_data: List[Dict] = []
+        self.current_color = "blue"
+        self.color_index = 0
+        
+        # UI references (reset on each UI build)
+        self.custom_ui_widget = None
+        self.function_list = None
+        self.func_input = None
+        self.label_input = None
+        self.color_btn = None
+        self.marker_combo = None
+        self.mark_repeat_spin = None
+        self.linestyle_combo = None
+        self.linewidth_spin = None
+        self.x_min = None
+        self.x_max = None
+        self.y_min = None
+        self.y_max = None
+        self.auto_scale_y = None
+        self.category_combo = None
+        self.preset_combo = None
+        self.color_preset_combo = None
+    
+    def get_plugin_name(self) -> str:
+        return "Function Plot"
+    
+    def get_user_options(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            "samples": {
+                "type": "int",
+                "default": 200,
+                "label": "Samples per Function",
+                "min": 50,
+                "max": 1000
+            },
+            "show_grid": {
+                "type": "bool",
+                "default": True,
+                "label": "Show Grid"
+            },
+            "show_axes": {
+                "type": "bool",
+                "default": True,
+                "label": "Show Axes Lines"
+            },
+            "show_legend": {
+                "type": "bool",
+                "default": True,
+                "label": "Show Legend"
+            },
+            "legend_position": {
+                "type": "str",
+                "default": "best",
+                "label": "Legend Position (best, upper right, lower left)"
+            },
+            "title": {
+                "type": "str",
+                "default": "",
+                "label": "Plot Title"
+            },
+            "xlabel": {
+                "type": "str",
+                "default": "x",
+                "label": "X-axis Label"
+            },
+            "ylabel": {
+                "type": "str",
+                "default": "f(x)",
+                "label": "Y-axis Label"
+            }
+        }
+    
+    def create_custom_ui(self, parent):
+        """Create custom UI for function input"""
+        # Reset UI references only
+        self.custom_ui_widget = None
+        self.function_list = None
+        self.func_input = None
+        self.label_input = None
+        self.color_btn = None
+        self.marker_combo = None
+        self.mark_repeat_spin = None
+        self.linestyle_combo = None
+        self.linewidth_spin = None
+        self.x_min = None
+        self.x_max = None
+        self.y_min = None
+        self.y_max = None
+        self.auto_scale_y = None
+        self.category_combo = None
+        self.preset_combo = None
+        self.color_preset_combo = None
+        self.color_preset_combo = None
+        
+        self.custom_ui_widget = QWidget(parent)
+        layout = QVBoxLayout(self.custom_ui_widget)
+        layout.setSpacing(8)
+        
+        # === DOMAIN SETTINGS ===
+        domain_group = QGroupBox("Domain")
+        domain_layout = QGridLayout(domain_group)
+        
+        # X range
+        domain_layout.addWidget(QLabel("X min:"), 0, 0)
+        self.x_min = QDoubleSpinBox()
+        self.x_min.setRange(-1000, 1000)
+        self.x_min.setValue(-10)
+        self.x_min.setDecimals(2)
+        domain_layout.addWidget(self.x_min, 0, 1)
+        
+        domain_layout.addWidget(QLabel("X max:"), 0, 2)
+        self.x_max = QDoubleSpinBox()
+        self.x_max.setRange(-1000, 1000)
+        self.x_max.setValue(10)
+        self.x_max.setDecimals(2)
+        domain_layout.addWidget(self.x_max, 0, 3)
+        
+        # Y range
+        domain_layout.addWidget(QLabel("Y min:"), 1, 0)
+        self.y_min = QDoubleSpinBox()
+        self.y_min.setRange(-1000, 1000)
+        self.y_min.setValue(-10)
+        self.y_min.setDecimals(2)
+        self.y_min.setSpecialValueText("Auto")
+        domain_layout.addWidget(self.y_min, 1, 1)
+        
+        domain_layout.addWidget(QLabel("Y max:"), 1, 2)
+        self.y_max = QDoubleSpinBox()
+        self.y_max.setRange(-1000, 1000)
+        self.y_max.setValue(10)
+        self.y_max.setDecimals(2)
+        self.y_max.setSpecialValueText("Auto")
+        domain_layout.addWidget(self.y_max, 1, 3)
+        
+        # Auto-scale checkbox
+        self.auto_scale_y = QCheckBox("Auto-scale Y")
+        self.auto_scale_y.setChecked(True)
+        self.auto_scale_y.toggled.connect(self._toggle_y_range)
+        domain_layout.addWidget(self.auto_scale_y, 1, 4)
+        
+        layout.addWidget(domain_group)
+        
+        # === ADD FUNCTION GROUP ===
+        add_group = QGroupBox("Add Function")
+        add_layout = QVBoxLayout(add_group)
+        
+        # Function expression
+        expr_layout = QHBoxLayout()
+        expr_layout.addWidget(QLabel("f(x) ="))
+        self.func_input = QLineEdit()
+        self.func_input.setPlaceholderText("e.g., np.sin(x), x**2 + 1")
+        self.func_input.setText("np.sin(x)")
+        expr_layout.addWidget(self.func_input)
+        add_layout.addLayout(expr_layout)
+        
+        # Label for legend
+        label_layout = QHBoxLayout()
+        label_layout.addWidget(QLabel("Label:"))
+        self.label_input = QLineEdit()
+        self.label_input.setPlaceholderText("Legend label (optional)")
+        label_layout.addWidget(self.label_input)
+        add_layout.addLayout(label_layout)
+        
+        # Style options in grid
+        style_grid = QGridLayout()
+        
+        # Color
+        style_grid.addWidget(QLabel("Color:"), 0, 0)
+        color_layout = QHBoxLayout()
+        self.color_btn = QPushButton()
+        self.color_btn.setFixedSize(60, 25)
+        self.color_btn.setStyleSheet(f"background-color: {self.current_color}; border: 1px solid black;")
+        self.color_btn.clicked.connect(self.on_choose_color)
+        color_layout.addWidget(self.color_btn)
+        
+        self.color_preset_combo = QComboBox()
+        self.color_preset_combo.addItems(self.COLOR_PRESETS)
+        self.color_preset_combo.setCurrentText(self.current_color)
+        self.color_preset_combo.currentTextChanged.connect(self.on_color_preset_changed)
+        color_layout.addWidget(self.color_preset_combo)
+        style_grid.addLayout(color_layout, 0, 1)
+        
+        # Marker
+        style_grid.addWidget(QLabel("Marker:"), 1, 0)
+        self.marker_combo = QComboBox()
+        self.marker_combo.addItems(list(self.MARKER_OPTIONS.keys()))
+        style_grid.addWidget(self.marker_combo, 1, 1)
+        
+        # Mark repeat
+        style_grid.addWidget(QLabel("Mark Every:"), 2, 0)
+        self.mark_repeat_spin = QSpinBox()
+        self.mark_repeat_spin.setRange(1, 100)
+        self.mark_repeat_spin.setValue(10)
+        self.mark_repeat_spin.setToolTip("Place marker every N points")
+        style_grid.addWidget(self.mark_repeat_spin, 2, 1)
+        
+        # Line style
+        style_grid.addWidget(QLabel("Line Style:"), 3, 0)
+        self.linestyle_combo = QComboBox()
+        self.linestyle_combo.addItems(list(self.LINESTYLE_OPTIONS.keys()))
+        style_grid.addWidget(self.linestyle_combo, 3, 1)
+        
+        # Line width
+        style_grid.addWidget(QLabel("Line Width:"), 4, 0)
+        self.linewidth_spin = QDoubleSpinBox()
+        self.linewidth_spin.setRange(0.5, 10.0)
+        self.linewidth_spin.setValue(2.0)
+        self.linewidth_spin.setSingleStep(0.5)
+        style_grid.addWidget(self.linewidth_spin, 4, 1)
+        
+        add_layout.addLayout(style_grid)
+        
+        # Add button
+        btn_add = QPushButton("➕ Add Function")
+        btn_add.setMinimumHeight(30)
+        btn_add.clicked.connect(self.on_add_function)
+        add_layout.addWidget(btn_add)
+        
+        layout.addWidget(add_group)
+        
+        # === PRESETS GROUP ===
+        preset_group = QGroupBox("Function Presets")
+        preset_layout = QVBoxLayout(preset_group)
+        
+        preset_row = QHBoxLayout()
+        
+        self.category_combo = QComboBox()
+        self.category_combo.addItems(list(self.FUNCTION_CATEGORIES.keys()))
+        self.category_combo.currentTextChanged.connect(self.on_category_changed)
+        preset_row.addWidget(self.category_combo)
+        
+        self.preset_combo = QComboBox()
+        # Initialize presets for first category
+        first_category = list(self.FUNCTION_CATEGORIES.keys())[0]
+        for name, _ in self.FUNCTION_CATEGORIES[first_category]:
+            self.preset_combo.addItem(name)
+        preset_row.addWidget(self.preset_combo)
+        
+        btn_load_preset = QPushButton("Load")
+        btn_load_preset.clicked.connect(self.on_load_preset)
+        preset_row.addWidget(btn_load_preset)
+        
+        preset_layout.addLayout(preset_row)
+        layout.addWidget(preset_group)
+        
+        # === FUNCTIONS LIST ===
+        list_group = QGroupBox(f"Functions List ({len(self.functions_data)} functions)")
+        self.list_group = list_group
+        list_layout = QVBoxLayout(list_group)
+        
+        self.function_list = QListWidget()
+        self.function_list.setMinimumHeight(100)
+        self.function_list.setSelectionMode(QListWidget.SingleSelection)
+        list_layout.addWidget(self.function_list)
+        
+        # Populate list with existing functions
+        self.refresh_function_list()
+        
+        # List buttons row 1
+        list_btn_layout1 = QHBoxLayout()
+        
+        btn_edit = QPushButton("Edit")
+        btn_edit.clicked.connect(self.on_edit_selected)
+        list_btn_layout1.addWidget(btn_edit)
+        
+        btn_remove = QPushButton("Remove")
+        btn_remove.clicked.connect(self.on_remove_selected)
+        list_btn_layout1.addWidget(btn_remove)
+        
+        btn_clear = QPushButton("Clear All")
+        btn_clear.clicked.connect(self.on_clear_all)
+        list_btn_layout1.addWidget(btn_clear)
+        
+        list_layout.addLayout(list_btn_layout1)
+        
+        # List buttons row 2
+        list_btn_layout2 = QHBoxLayout()
+        
+        btn_up = QPushButton("↑ Move Up")
+        btn_up.clicked.connect(self.on_move_up)
+        list_btn_layout2.addWidget(btn_up)
+        
+        btn_down = QPushButton("↓ Move Down")
+        btn_down.clicked.connect(self.on_move_down)
+        list_btn_layout2.addWidget(btn_down)
+        
+        list_layout.addLayout(list_btn_layout2)
+        
+        layout.addWidget(list_group)
+        
+        # === QUICK ADD BUTTONS ===
+        quick_group = QGroupBox("Quick Add Common Functions")
+        quick_layout = QGridLayout(quick_group)
+        
+        quick_funcs = [
+            ("sin(x)", "np.sin(x)", "blue"),
+            ("cos(x)", "np.cos(x)", "red"),
+            ("tan(x)", "np.tan(x)", "green"),
+            ("x²", "x**2", "orange"),
+            ("x³", "x**3", "purple"),
+            ("exp(x)", "np.exp(x)", "brown"),
+            ("ln(x)", "np.log(np.abs(x)+0.01)", "pink"),
+            ("√x", "np.sqrt(np.abs(x))", "cyan"),
+        ]
+        
+        for i, (name, expr, color) in enumerate(quick_funcs):
+            btn = QPushButton(name)
+            btn.setToolTip(f"Add {expr}")
+            # Use default argument to capture current values
+            btn.clicked.connect(lambda checked, e=expr, c=color, n=name: self.on_quick_add(e, c, n))
+            quick_layout.addWidget(btn, i // 4, i % 4)
+        
+        layout.addWidget(quick_group)
+        
+        layout.addStretch()
+        return self.custom_ui_widget
+    
+    # === EVENT HANDLERS ===
+    
+    def on_choose_color(self):
+        """Open color picker dialog"""
+        color = QColorDialog.getColor(QColor(self.current_color), self.custom_ui_widget)
+        if color.isValid():
+            self.current_color = color.name()
+            self.update_color_button()
+    
+    def on_color_preset_changed(self, color_name: str):
+        """Set color from preset dropdown"""
+        self.current_color = color_name
+        self.update_color_button()
+    
+    def update_color_button(self):
+        """Update color button appearance"""
+        if self.color_btn:
+            self.color_btn.setStyleSheet(
+                f"background-color: {self.current_color}; border: 1px solid black;"
+            )
+    
+    def on_category_changed(self, category: str):
+        """Update preset combo based on category selection"""
+        if self.preset_combo is None:
+            return
+        
+        self.preset_combo.clear()
+        presets = self.FUNCTION_CATEGORIES.get(category, [])
+        for name, _ in presets:
+            self.preset_combo.addItem(name)
+    
+    def on_load_preset(self):
+        """Load selected preset into input field"""
+        if self.category_combo is None or self.preset_combo is None:
+            return
+        if self.func_input is None:
+            return
+        
+        category = self.category_combo.currentText()
+        preset_name = self.preset_combo.currentText()
+        
+        presets = self.FUNCTION_CATEGORIES.get(category, [])
+        for name, expr in presets:
+            if name == preset_name:
+                self.func_input.setText(expr)
+                if self.label_input and not self.label_input.text():
+                    self.label_input.setText(name)
+                break
+    
+    def on_add_function(self):
+        """Add function from current input"""
+        if self.func_input is None:
+            return
+        
+        expr = self.func_input.text().strip()
+        if not expr:
+            return
+        
+        # Validate expression
+        try:
+            x = np.linspace(-1, 1, 10)
+            eval(expr)
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self.custom_ui_widget, "Invalid Function", 
+                              f"Error in expression: {str(e)}")
+            return
+        
+        # Get all options
+        label = self.label_input.text().strip() if self.label_input else ""
+        if not label:
+            label = expr
+        
+        marker_key = self.marker_combo.currentText() if self.marker_combo else "None"
+        marker = self.MARKER_OPTIONS.get(marker_key, "")
+        
+        mark_repeat = self.mark_repeat_spin.value() if self.mark_repeat_spin else 10
+        
+        linestyle_key = self.linestyle_combo.currentText() if self.linestyle_combo else "Solid (-)"
+        linestyle = self.LINESTYLE_OPTIONS.get(linestyle_key, "-")
+        
+        linewidth = self.linewidth_spin.value() if self.linewidth_spin else 2.0
+        
+        func_data = {
+            "expression": expr,
+            "color": self.current_color,
+            "marker": marker,
+            "mark_repeat": mark_repeat,
+            "label": label,
+            "linewidth": linewidth,
+            "linestyle": linestyle
+        }
+        
+        self.functions_data.append(func_data)
+        self.refresh_function_list()
+        
+        # Clear inputs for next function
+        if self.func_input:
+            self.func_input.clear()
+        if self.label_input:
+            self.label_input.clear()
+        
+        # Cycle to next color
+        self.color_index = (self.color_index + 1) % len(self.COLOR_PRESETS)
+        self.current_color = self.COLOR_PRESETS[self.color_index]
+        self.update_color_button()
+        if self.color_preset_combo:
+            self.color_preset_combo.setCurrentText(self.current_color)
+    
+    def on_quick_add(self, expression: str, color: str, label: str):
+        """Quick add a predefined function"""
+        func_data = {
+            "expression": expression,
+            "color": color,
+            "marker": "",
+            "mark_repeat": 10,
+            "label": label,
+            "linewidth": 2.0,
+            "linestyle": "-"
+        }
+        self.functions_data.append(func_data)
+        self.refresh_function_list()
+    
+    def on_edit_selected(self):
+        """Load selected function into editor for editing"""
+        if self.function_list is None:
+            return
+        
+        row = self.function_list.currentRow()
+        if row < 0 or row >= len(self.functions_data):
+            return
+        
+        func = self.functions_data[row]
+        
+        # Load into editor
+        if self.func_input:
+            self.func_input.setText(func.get("expression", ""))
+        if self.label_input:
+            self.label_input.setText(func.get("label", ""))
+        
+        self.current_color = func.get("color", "blue")
+        self.update_color_button()
+        if self.color_preset_combo and self.current_color in self.COLOR_PRESETS:
+            self.color_preset_combo.setCurrentText(self.current_color)
+        
+        if self.marker_combo:
+            marker = func.get("marker", "")
+            for key, val in self.MARKER_OPTIONS.items():
+                if val == marker:
+                    self.marker_combo.setCurrentText(key)
+                    break
+        
+        if self.mark_repeat_spin:
+            self.mark_repeat_spin.setValue(func.get("mark_repeat", 10))
+        
+        if self.linestyle_combo:
+            linestyle = func.get("linestyle", "-")
+            for key, val in self.LINESTYLE_OPTIONS.items():
+                if val == linestyle:
+                    self.linestyle_combo.setCurrentText(key)
+                    break
+        
+        if self.linewidth_spin:
+            self.linewidth_spin.setValue(func.get("linewidth", 2.0))
+        
+        # Remove from list (will be re-added when user clicks Add)
+        self.functions_data.pop(row)
+        self.refresh_function_list()
+    
+    def on_remove_selected(self):
+        """Remove selected function"""
+        if self.function_list is None:
+            return
+        
+        row = self.function_list.currentRow()
+        if row >= 0 and row < len(self.functions_data):
+            self.functions_data.pop(row)
+            self.refresh_function_list()
+    
+    def on_clear_all(self):
+        """Clear all functions"""
+        self.functions_data.clear()
+        self.refresh_function_list()
+    
+    def on_move_up(self):
+        """Move selected function up"""
+        if self.function_list is None:
+            return
+        
+        row = self.function_list.currentRow()
+        if row > 0:
+            self.functions_data[row], self.functions_data[row-1] = \
+                self.functions_data[row-1], self.functions_data[row]
+            self.refresh_function_list()
+            self.function_list.setCurrentRow(row - 1)
+    
+    def on_move_down(self):
+        """Move selected function down"""
+        if self.function_list is None:
+            return
+        
+        row = self.function_list.currentRow()
+        if row >= 0 and row < len(self.functions_data) - 1:
+            self.functions_data[row], self.functions_data[row+1] = \
+                self.functions_data[row+1], self.functions_data[row]
+            self.refresh_function_list()
+            self.function_list.setCurrentRow(row + 1)
+    
+    def refresh_function_list(self):
+        """Refresh the function list display"""
+        if self.function_list is None:
+            return
+        
+        self.function_list.clear()
+        
+        for i, func in enumerate(self.functions_data):
+            expr = func.get("expression", "")
+            color = func.get("color", "blue")
+            label = func.get("label", "")
+            marker = func.get("marker", "")
+            
+            # Build display text
+            item_text = f"{i+1}. [{color}] {expr}"
+            if label and label != expr:
+                item_text += f" → \"{label}\""
+            if marker:
+                item_text += f" (marker: {marker})"
+            
+            item = QListWidgetItem(item_text)
+            self.function_list.addItem(item)
+        
+        # Update group title
+        if hasattr(self, 'list_group') and self.list_group:
+            self.list_group.setTitle(f"Functions List ({len(self.functions_data)} functions)")
+    
+    def _toggle_y_range(self, checked):
+        """Toggle Y range controls based on auto-scale checkbox"""
+        if self.y_min and self.y_max:
+            self.y_min.setEnabled(not checked)
+            self.y_max.setEnabled(not checked)
+    
+    def get_custom_ui_data(self):
+        """Get data from custom UI"""
+        return {
+            "functions": self.functions_data.copy(),
+            "x_min": self.x_min.value() if self.x_min else -10,
+            "x_max": self.x_max.value() if self.x_max else 10,
+            "y_min": self.y_min.value() if self.y_min else -10,
+            "y_max": self.y_max.value() if self.y_max else 10,
+            "auto_scale_y": self.auto_scale_y.isChecked() if self.auto_scale_y else True
+        }
+    
+    def validate_data(self, data: Any) -> Tuple[bool, str]:
+        if not isinstance(data, dict):
+            return False, "Invalid data format"
+        
+        functions = data.get("functions", [])
+        if not functions:
+            return False, "No functions defined. Please add at least one function."
+        
+        # Validate each function
+        x = np.linspace(-1, 1, 10)
+        for i, func in enumerate(functions):
+            expr = func.get("expression", "")
+            try:
+                eval(expr)
+            except Exception as e:
+                return False, f"Invalid function #{i+1} '{expr}': {str(e)}"
+        
+        return True, ""
+    
+    def plot(self, data: Any, options: Dict[str, Any]):
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        functions = data.get("functions", [])
+        x_min = data.get("x_min", -10)
+        x_max = data.get("x_max", 10)
+        samples = options.get("samples", 200)
+        
+        x = np.linspace(x_min, x_max, samples)
+        
+        for func_data in functions:
+            expr = func_data.get("expression", "")
+            color = func_data.get("color", "blue")
+            marker = func_data.get("marker", "")
+            mark_repeat = func_data.get("mark_repeat", 10)
+            label = func_data.get("label", expr)
+            linewidth = func_data.get("linewidth", 2.0)
+            linestyle = func_data.get("linestyle", "-")
+            
+            try:
+                y = eval(expr)
+                if np.isscalar(y):
+                    y = np.full_like(x, y)
+                
+                # Build plot kwargs
+                plot_kwargs = {
+                    "color": color,
+                    "linewidth": linewidth,
+                    "label": label,
+                }
+                
+                # Handle line style
+                if linestyle and linestyle != "":
+                    plot_kwargs["linestyle"] = linestyle
+                else:
+                    plot_kwargs["linestyle"] = "None"
+                
+                # Handle marker
+                if marker and marker != "":
+                    plot_kwargs["marker"] = marker
+                    plot_kwargs["markevery"] = mark_repeat
+                    plot_kwargs["markersize"] = 6
+                
+                ax.plot(x, y, **plot_kwargs)
+                
+            except Exception as e:
+                print(f"Error plotting {expr}: {e}")
+                continue
+        
+        # Axes and styling
+        if options.get('show_grid', True):
+            ax.grid(True, alpha=0.3)
+        
+        if options.get('show_axes', True):
+            ax.axhline(y=0, color='k', linewidth=0.5)
+            ax.axvline(x=0, color='k', linewidth=0.5)
+        
+        # Set Y limits if not auto-scaling
+        if not data.get("auto_scale_y", True):
+            y_min = data.get("y_min", -10)
+            y_max = data.get("y_max", 10)
+            ax.set_ylim(y_min, y_max)
+        
+        if options.get('show_legend', True) and functions:
+            ax.legend(loc=options.get('legend_position', 'best'))
+        
+        ax.set_xlabel(options.get('xlabel', 'x'))
+        ax.set_ylabel(options.get('ylabel', 'f(x)'))
+        
+        title = options.get('title', '')
+        if title:
+            ax.set_title(title)
+        
+        plt.tight_layout()
+        return fig
+    
+    def generate_tikz(self, data: Any, options: Dict[str, Any]) -> str:
+        functions = data.get("functions", [])
+        x_min = data.get("x_min", -10)
+        x_max = data.get("x_max", 10)
+        y_min = data.get("y_min", -10)
+        y_max = data.get("y_max", 10)
+        auto_scale_y = data.get("auto_scale_y", True)
+        samples = options.get("samples", 200)
+        
+        # Build plot commands
+        plot_commands = []
+        legend_entries = []
+        color_definitions = []
+        
+        for idx, func_data in enumerate(functions):
+            expr = func_data.get("expression", "")
+            color = func_data.get("color", "blue")
+            marker = func_data.get("marker", "")
+            mark_repeat = func_data.get("mark_repeat", 10)
+            label = func_data.get("label", expr)
+            linewidth = func_data.get("linewidth", 2.0)
+            linestyle = func_data.get("linestyle", "-")
+            
+            # Convert expression to TikZ
+            tikz_expr = expr
+            replacements = [
+                ("np.sin", "sin"), ("np.cos", "cos"), ("np.tan", "tan"),
+                ("np.exp", "exp"), ("np.log", "ln"), ("np.sqrt", "sqrt"),
+                ("np.abs", "abs"), ("np.sinh", "sinh"), ("np.cosh", "cosh"),
+                ("np.tanh", "tanh"), ("np.arcsin", "asin"), ("np.arccos", "acos"),
+                ("np.arctan", "atan"), ("np.pi", "pi"), ("np.sinc", "sin(deg(x))/deg(x)"),
+                ("np.maximum(0, x)", "max(0,x)"),
+                ("**", "^"),
+            ]
+            for old, new in replacements:
+                tikz_expr = tikz_expr.replace(old, new)
+            
+            # Handle color
+            tikz_color = color
+            if color.startswith('#'):
+                color_name = f"customcolor{idx}"
+                # Convert hex to RGB
+                r = int(color[1:3], 16)
+                g = int(color[3:5], 16)
+                b = int(color[5:7], 16)
+                color_definitions.append(f"\\definecolor{{{color_name}}}{{RGB}}{{{r},{g},{b}}}")
+                tikz_color = color_name
+            
+            # Build options list
+            plot_options = [f"color={tikz_color}", f"line width={linewidth}pt"]
+            
+            # Line style
+            if linestyle == "--":
+                plot_options.append("dashed")
+            elif linestyle == ":":
+                plot_options.append("dotted")
+            elif linestyle == "-.":
+                plot_options.append("dash dot")
+            elif linestyle == "" or linestyle == "None":
+                plot_options.append("only marks")
+            
+            # Marker
+            marker_map = {
+                "o": "mark=o", "s": "mark=square", "^": "mark=triangle",
+                "v": "mark=triangle*", "D": "mark=diamond", "*": "mark=star",
+                "+": "mark=+", "x": "mark=x", ".": "mark=*,mark size=1pt",
+            }
+            if marker in marker_map:
+                plot_options.append(marker_map[marker])
+                plot_options.append(f"mark repeat={mark_repeat}")
+            
+            plot_options.append("smooth")
+            
+            options_str = ",\n    ".join(plot_options)
+            
+            plot_cmd = f"""\\addplot[
+    {options_str}
+] {{{tikz_expr}}};"""
+            
+            plot_commands.append(plot_cmd)
+            
+            # Legend entry
+            safe_label = label.replace("_", "\\_").replace("^", "\\^{}")
+            safe_label = safe_label.replace("$", "")
+            legend_entries.append(f"\\addlegendentry{{{safe_label}}}")
+        
+        # Build full TikZ code
+        color_defs_str = "\n".join(color_definitions)
+        plots_str = "\n".join(plot_commands)
+        legends_str = "\n".join(legend_entries) if options.get('show_legend', True) else ""
+        
+        grid_str = "grid=major," if options.get('show_grid', True) else ""
+        axis_str = "axis lines=middle," if options.get('show_axes', True) else ""
+        
+        legend_pos = options.get('legend_position', 'best')
+        legend_pos_map = {
+            'best': 'north east', 'upper right': 'north east',
+            'upper left': 'north west', 'lower right': 'south east',
+            'lower left': 'south west',
+        }
+        tikz_legend_pos = legend_pos_map.get(legend_pos, 'north east')
+        
+        title = options.get('title', '')
+        title_str = f"title={{{title}}}," if title else ""
+        
+        # Y range string
+        y_range_str = "" if auto_scale_y else f"ymin={y_min}, ymax={y_max},"
+        
+        tikz_code = f"""{color_defs_str}
+\\begin{{tikzpicture}}
+\\begin{{axis}}[
+    xlabel={{{options.get('xlabel', 'x')}}},
+    ylabel={{{options.get('ylabel', 'f(x)')}}},
+    domain={x_min}:{x_max},{y_range_str}
+    samples={samples},
+    {grid_str}
+    {axis_str}
+    {title_str}legend pos={tikz_legend_pos},
+    width=12cm,
+    height=8cm,
+    trig format=rad,
+]
+{plots_str}
+{legends_str}
+\\end{{axis}}
+\\end{{tikzpicture}}"""
+        
+        return tikz_code.strip()
+    
+    def get_tikz_libraries(self) -> List[str]:
+        return ["pgfplots"]
