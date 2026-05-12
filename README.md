@@ -114,29 +114,84 @@ qdarkstyle>=3.0   # optional
 
 ```
 ayntex/
-├── main.py                     # Entry point
-├── main_window.py              # Main application window
-├── app_info.py                 # App name, version, config filename
-├── config_manager.py           # INI-based settings persistence
-├── settings_manager.py         # Settings dialog (UI)
-├── compilation_manager.py      # LaTeX process management
-├── toolbar_manager.py          # Toolbar, symbol/command panels, bookmarks
-├── editor_manager.py           # Multi-file editor handling
-├── pdf_manager.py              # PDF viewer and SyncTeX
-├── layout_manager.py           # Splitter/layout switching
-├── menu_manager.py             # Menu bar
-├── icons_manager.py            # Icon loading and generation
-├── style_manager.py            # Theme application
-├── single_instance.py          # Single-instance guard (QLocalServer)
-├── search_replace_dialog.py    # Find & Replace dialog
-├── arabic_command_dialog.py    # Arabic command insertion dialog
-├── math_symbols_menu.py        # Math symbol definitions
-├── latex_commands_menu.py      # LaTeX command definitions
-├── cwl_manager.py              # CWL completion file manager
-├── completion_settings_widget.py
-├── terminal_widget.py          # Embedded terminal (optional)
-├── icons/                      # Application icons
-└── cwl/                        # CWL completion files
+├── main.py                             # Application entry point
+├── main_window.py                      # Main application window and integration hub
+├── app_info.py                         # App metadata (name, version, paths)
+├── config_manager.py                   # INI/QSettings persistence and configuration handling
+├── settings_manager.py                 # Settings dialog and preferences UI
+├── compilation_manager.py              # LaTeX compilation and process management
+├── backmatter_compile.py               # Backmatter/Bibliography compilation helpers
+├── bibtex_manager.py                   # BibTeX bibliography management
+├── toolbar_manager.py                  # Toolbars, symbol panels, and quick actions
+├── menu_manager.py                     # Menu bar and actions
+├── layout_manager.py                   # Splitter and workspace layout management
+├── side_panel.py                       # Dockable side panels and navigation widgets
+├── editor_manager.py                   # Multi-tab editor handling
+├── context_menu.py                     # Custom editor context menus
+├── search_replace_dialog.py            # Find & Replace dialog
+├── latex_highlighter.py                # LaTeX syntax highlighting
+├── latex_completer_manager.py          # Auto-completion engine integration
+├── cwl_manager.py                      # CWL completion file management
+├── completion_settings_widget.py       # Completion settings UI widget
+├── spell_checker.py                    # Spell checking integration
+├── spell_worker.py                     # Background spell checking worker
+├── file_watcher.py                     # External file modification monitoring
+├── bookmarks_manager.py                # Bookmark management for editor/PDF navigation
+├── pdf_manager.py                      # PDF synchronization and viewer coordination
+├── pdf_viewer.py                       # Embedded PDF viewer widget
+├── pdf_comparison.py                   # Compare rendered PDF outputs
+├── djvu_tab.py                         # DjVu document viewing tab
+├── latex_comparator.py                 # Compare LaTeX source documents
+├── icons_manager.py                    # Icon loading, theming, and generation
+├── style_manager.py                    # Theme and stylesheet management
+├── translations.py                     # UI translations and localization strings
+├── translations_database.py            # Translation database utilities
+├── single_instance.py                  # Single-instance protection (QLocalServer)
+├── terminal_widget.py                  # Embedded terminal widget
+├── calculator_widget.py                # Built-in calculator widget
+├── todo_list.py                        # Task and TODO management panel
+├── tip_day.py                          # Tip-of-the-day system
+├── feedback.py                         # User feedback/reporting utilities
+├── help_manager.py                     # Help system and documentation access
+├── insert_character.py                 # Special character insertion utilities
+├── arabic_command_dialog.py            # Arabic LaTeX command insertion dialog
+├── math_symbols_menu.py                # Mathematical symbol definitions/menu
+├── latex_commands_menu.py              # LaTeX command definitions/menu
+├── latex_document_wizard.py            # New LaTeX document/project wizard
+├── spreadsheet_tab.py                  # Spreadsheet/data editing tab
+├── tikz_plotter_tab.py                 # TikZ plotting and preview tab
+├── tools_tab.py                        # Multi-tool utilities tab
+├── ai_tab.py                           # AI assistant integration tab
+├── ai_widget_lite.py                   # Lightweight AI interaction widget
+├── online_ai_provider.py               # Online AI backend/provider interface
+├── knowledge_database_integration.py   # Knowledge database integration layer
+├── katex_loader.py                     # KaTeX loading and rendering utilities
+├── test.py                             # Development/testing script
+├── cwl/                                # CWL auto-completion definition files
+├── icons/                              # Application icons and UI assets
+├── katex/                              # Local KaTeX distribution
+│   ├── contrib/                        # KaTeX contributed extensions
+│   └── fonts/                          # KaTeX font assets
+├── plugins/                            # Plotting and data visualization plugins
+│   ├── __init__.py                     # Plugin package initializer
+│   ├── barplot_plugin.py               # Bar plot generator
+│   ├── bilinear_patch_plugin.py        # Bilinear patch visualization plugin
+│   ├── boxplot_plugin.py               # Box plot generator
+│   ├── contour_quiver_plugin.py        # Contour and vector field plotting
+│   ├── errorbar_plugin.py              # Error bar plotting plugin
+│   ├── function_plugin.py              # Function plotting plugin
+│   ├── graph_drawing_plugin.py         # Graph drawing and visualization
+│   ├── heatmap_plugin.py               # Heatmap visualization plugin
+│   ├── histogram_plugin.py             # Histogram generator
+│   ├── lineplot_plugin.py              # Line plot generator
+│   ├── numerical_data_plugin.py        # Numerical dataset processing plugin
+│   ├── piechart_plugin.py              # Pie chart generator
+│   ├── polar_plugin.py                 # Polar coordinate plotting
+│   ├── scatter_plugin.py               # Scatter plot generator
+│   ├── stacked_area_plugin.py          # Stacked area chart generator
+│   ├── surface3d_plugin.py             # 3D surface plotting plugin
+│   └── surface_data_plugin.py          # Surface dataset utilities
+└── tips/                               # Tip-of-the-day content files
 ```
 
 ---
