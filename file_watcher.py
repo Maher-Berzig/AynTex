@@ -74,22 +74,30 @@ class FileWatcher(QObject):
     def watch(self, path: str):
         if path and os.path.isfile(path):
             self._watcher.addPath(path)
-            
-            # 🔥 Only poll non-tex files
+
+            # Seed the mtime table for every watched file so the spurious-event
+            # guard in _on_file_changed has a baseline to compare against.
+            normalised = os.path.normcase(os.path.abspath(path))
+            try:
+                self._mtimes[normalised] = os.path.getmtime(path)
+            except OSError:
+                pass
+
+            # 🔥 Also poll non-tex files (belt-and-suspenders on some platforms)
             if not path.lower().endswith(".tex"):
                 self._poll_paths.add(path)
-                self._mtimes[path] = os.path.getmtime(path)
 
     def unwatch(self, path: str):
         """Stop watching *path*."""
         if path:
             self._watcher.removePath(path)
             self._cancel_pending(path)
-            self._suppressed.discard(path)
+            normalised = os.path.normcase(os.path.abspath(path))
+            self._suppressed.discard(normalised)
             self._dialog_open.discard(path)
-            
+
             self._poll_paths.discard(path)
-            self._mtimes.pop(path, None)
+            self._mtimes.pop(normalised, None)
 
     def watch_all(self):
         """Watch every file currently open in the editor manager."""
@@ -101,6 +109,7 @@ class FileWatcher(QObject):
         Suppress the next change notification for *path*.
         Call this immediately before writing the file yourself.
         """
+        # Use the same normalisation as _on_file_changed so the lookup always hits.
         self._suppressed.add(os.path.normcase(os.path.abspath(path)))
 
     def resume(self, path: str):
@@ -109,7 +118,14 @@ class FileWatcher(QObject):
         QFileSystemWatcher sometimes drops the watch after an atomic
         file replace, so we re-add the path here.
         """
-        self._suppressed.discard(os.path.normcase(os.path.abspath(path)))
+        normalised = os.path.normcase(os.path.abspath(path))
+        self._suppressed.discard(normalised)
+        # Refresh the mtime baseline BEFORE re-adding the path so that any
+        # signal fired by addPath() is ignored by the mtime guard.
+        try:
+            self._mtimes[normalised] = os.path.getmtime(path)
+        except OSError:
+            pass
         if path and os.path.isfile(path):
             if path not in self._watcher.files():
                 self._watcher.addPath(path)
@@ -254,6 +270,13 @@ class FileWatcher(QObject):
         normalised = os.path.normcase(os.path.abspath(path))
         if normalised in self._suppressed:
             self._suppressed.discard(normalised)
+            # Update the mtime baseline NOW so that the follow-up signal fired by
+            # resume() re-adding the path to QFileSystemWatcher is also suppressed
+            # by the mtime guard below.
+            try:
+                self._mtimes[normalised] = os.path.getmtime(path)
+            except OSError:
+                pass
             # Re-arm in case the OS dropped the watch on atomic replace
             QTimer.singleShot(150, lambda p=path: self._rearm(p))
             return
@@ -261,6 +284,25 @@ class FileWatcher(QObject):
         # Only react to files actually open in the editor
         if self._resolve_path(path) is None:
             return
+
+        # ── Spurious-event guard ──────────────────────────────────────────
+        # QFileSystemWatcher sometimes fires when a tab is merely *selected*
+        # (the OS touches the access-time or the inode ref-count changes).
+        # If the file's mtime hasn't changed since we last saw it, ignore.
+        try:
+            current_mtime = os.path.getmtime(path)
+        except OSError:
+            current_mtime = None
+
+        if current_mtime is not None:
+            last_mtime = self._mtimes.get(normalised)
+            if last_mtime is not None and current_mtime == last_mtime:
+                # mtime unchanged → not a real content modification; re-arm and bail
+                QTimer.singleShot(150, lambda p=path: self._rearm(p))
+                return
+            # Record the new mtime so future events can be compared
+            self._mtimes[normalised] = current_mtime
+        # ─────────────────────────────────────────────────────────────────
 
         # Re-arm: vim/emacs do atomic renames which can drop the inode watch
         QTimer.singleShot(150, lambda p=path: self._rearm(p))
@@ -425,6 +467,13 @@ class FileWatcher(QObject):
 
         # Re-arm the watcher (atomic save may have replaced the inode)
         self.resume(path)
+
+        # Update our mtime baseline so the spurious-event guard stays current
+        normalised = os.path.normcase(os.path.abspath(path))
+        try:
+            self._mtimes[normalised] = os.path.getmtime(path)
+        except OSError:
+            pass
 
         # Update UI
         if hasattr(self._mw, "update_title"):
