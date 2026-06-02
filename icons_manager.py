@@ -40,6 +40,7 @@ class IconsManager:
             "save": ["save.svg", "save.png", "save.ico"],
             "save_all": ["save_all.svg", "save_all.png", "save_all.ico"],
             "save_as": ["save_as.svg", "save_as.png", "save_as.ico"],
+            "save_copy_as": ["save_copy_as.svg", "save_copy_as.png", "save_copy_as.ico"],
             "close_tex": ["close_tex.svg", "close_tex.png", "close_tex.ico"],
             "close_all_tex": ["close_all_tex.svg", "close_all_tex.png", "close_all_tex.ico"],
             "close_pdf": ["close_pdf.svg", "close_pdf.png", "close_pdf.ico"],
