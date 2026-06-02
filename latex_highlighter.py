@@ -240,21 +240,12 @@ class LaTeXHighlighter(QSyntaxHighlighter):
         
         # Comments
         comment_format = QTextCharFormat()
+        self.comment_format = comment_format
         comment_format.setForeground(self.color_map.get('comment', QColor(128, 128, 128)))
         comment_format.setFontItalic(True)
         comment_pattern = r'%.*$'
         self.highlighting_rules.append((QRegExp(comment_pattern), comment_format))
         
-        # Special characters
-        # special_format = QTextCharFormat()
-        # special_format.setForeground(self.color_map.get('special', QColor(128, 0, 128)))
-        # special_format.setFontWeight(QFont.Bold)
-        # special_patterns = [
-            # r'\\&', r'\\\$', r'\\%', r'\\#', 
-            # r'\\_', r'\\\^', r'\\~',
-        # ]
-        # for pattern in special_patterns:
-            # self.highlighting_rules.append((QRegExp(pattern), special_format))
         # Special characters
         special_format = QTextCharFormat()
         special_format.setForeground(self.color_map.get('special', QColor(128, 0, 128)))
@@ -322,6 +313,13 @@ class LaTeXHighlighter(QSyntaxHighlighter):
                             QTextCharFormat.SpellCheckUnderline)
                         fmt.setUnderlineColor(QColor(color_str))
                         self.setFormat(rel_start, length, fmt)
+                        
+        # ─── NEW: Force comment formatting to override everything else ───
+        comment_re = QRegExp(r'%.*$')
+        idx = comment_re.indexIn(text)
+        if idx >= 0:
+            length = comment_re.matchedLength()
+            self.setFormat(idx, length, self.comment_format)                        
                 
     def _apply_spell_check(self, text):
         if not self.spell_checker:
