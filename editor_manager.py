@@ -1574,37 +1574,46 @@ class EditorManager:
             QMessageBox.critical(self.main_window, "Error", f"Could not open file: {str(e)}")
 
 
-
     def open_specific_file(self, path):
         """Open a specific file - with consistent path handling and proper tracking"""
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import Qt
+
         if not path:
             return
-        
-        # Use consistent path normalization
-        path = self.normalize_path(path)
-        
-        # Store the directory for future new files
-        self.last_opened_directory = os.path.dirname(path)
-        
-        # Ensure editor_tabs is initialized
-        self._ensure_editor_tabs_initialized()
-        
-        # Check if already open
-        existing_path = self._find_open_file(path)
-        if existing_path:
-            if self._switch_to_existing_file(existing_path):
-                self.current_file = existing_path
-                self.main_window.update_title()
-                self._add_to_recent_files(path)
-                self._add_to_session_files(path)
-                return
-        
-        # Open new file
-        self._open_new_file(path)
-        
-        if self.editor_layout_mode != "tabbed" and path in self.editor_files:
-            self._active_tab_widget_index = self.editor_files[path].get('tab_widget_index', 0)
-        
+
+        # Show wait cursor immediately
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+
+        try:
+            # Use consistent path normalization
+            path = self.normalize_path(path)
+            
+            # Store the directory for future new files
+            self.last_opened_directory = os.path.dirname(path)
+            
+            # Ensure editor_tabs is initialized
+            self._ensure_editor_tabs_initialized()
+            
+            # Check if already open
+            existing_path = self._find_open_file(path)
+            if existing_path:
+                if self._switch_to_existing_file(existing_path):
+                    self.current_file = existing_path
+                    self.main_window.update_title()
+                    self._add_to_recent_files(path)
+                    self._add_to_session_files(path)
+                    return
+            
+            # Open new file
+            self._open_new_file(path)
+            
+            if self.editor_layout_mode != "tabbed" and path in self.editor_files:
+                self._active_tab_widget_index = self.editor_files[path].get('tab_widget_index', 0)
+        finally:
+            # Always restore cursor, even if an error occurs
+            QApplication.restoreOverrideCursor()        
 
         
     def _ensure_editor_tabs_initialized(self):
@@ -1650,51 +1659,6 @@ class EditorManager:
             self.editor_tabs.setTabsClosable(True)
             self.editor_tabs.tabCloseRequested.connect(self.close_editor_tab)
 
-    # def _open_new_file(self, path):
-        # """Common logic for opening a new file"""
-        # try:
-            # with open(path, 'r', encoding='utf-8') as f:
-                # content = f.read()
-
-            # # Store the directory for future new files
-            # self.last_opened_directory = os.path.dirname(path)
-            
-            # pdf_path = os.path.splitext(path)[0] + ".pdf"
-
-            # # ✅ FIX: Pass FULL PATH instead of just basename
-            # editor = self.create_new_editor_tab(path, pdf_path, content)
-            # if not editor:
-                # return
-
-            # # Apply settings
-            # if hasattr(self.main_window, 'is_rtl'):
-                # alignment = Qt.AlignRight if self.main_window.is_rtl else Qt.AlignLeft
-                # editor.setAlignment(alignment)
-
-            # if hasattr(editor, 'setContentSafely'):
-                # editor.setContentSafely(content)
-            # else:
-                # editor.setPlainText(content)
-
-            # # Reset cursor and scroll
-            # cursor = editor.textCursor()
-            # cursor.movePosition(QTextCursor.Start)
-            # editor.setTextCursor(cursor)
-            # editor.verticalScrollBar().setValue(0)
-            # editor.ensureCursorVisible()
-
-            # # ✅ FIX: Set current_file AFTER creating the tab to ensure consistency
-            # self.current_file = path
-            
-            # # Update UI
-            # self.main_window.update_title()
-
-            # # Update recent files
-            # self._add_to_recent_files(path)
-
-        # except Exception as e:
-            # print(f"❌ Error opening new file: {e}")
-            # QMessageBox.critical(self.main_window, "Open Error", str(e))
 
     @staticmethod
     def _read_file_robust(path: str) -> str:
@@ -1825,16 +1789,7 @@ class EditorManager:
         #print(f"  ❌ No match found")
         return None
 
-    # def _find_open_file_pathlib(self, target_path):
-        # """Find if a file is already open - using pathlib"""
-        # target_path = Path(target_path).resolve()
-        
-        # for open_path in self.editor_files:
-            # if Path(open_path).resolve() == target_path:
-                # return open_path
-        
-        # return None
-    
+   
     def _switch_to_existing_file(self, existing_path):
         """Switch to an already open file with robust tab switching"""
         try:
@@ -2089,7 +2044,7 @@ class EditorManager:
             # Write file
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(normalized)
-            self.file_watcher.pause(path)
+            self.file_watcher.resume(path)
             
             # Update editor data
             self.editor_files[path]['saved_content'] = normalized
@@ -2121,12 +2076,16 @@ class EditorManager:
 
     def save_file_as(self):
         """Save file with a new name - improved to handle path updates"""
-        current_editor = self.get_current_editor()
-        if not current_editor:
-            return False
         
         lang = self.main_window.menu_language
-        t = self.main_window.translations[lang]
+        t = self.main_window.translations[lang]                            
+        
+        current_editor = self.get_current_editor()
+        current_file = self.get_current_file_path()
+        
+        if not current_editor or not current_file:
+            self.show_error(t["no_file_open"], t["open_a_latex_file"])
+            return
         
         # Get current file path for default location
         default_dir = ""
@@ -2225,6 +2184,72 @@ class EditorManager:
         
         return True    
 
+
+    def save_copy_as(self):
+        """Save a copy of the current document without changing the active file.
+        Automatically suggests a name like 'filename_copy1.tex' based on existing copies.
+        """
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]                            
+        
+        current_editor = self.get_current_editor()
+        current_file = self.get_current_file_path()
+        
+        if not current_editor or not current_file:
+            self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+            return       
+        
+        # Determine default directory and base name
+        if self.current_file and os.path.exists(self.current_file):
+            default_dir = os.path.dirname(self.current_file)
+            base_name = os.path.splitext(os.path.basename(self.current_file))[0]
+            extension = ".tex"
+        else:
+            default_dir = getattr(self, 'last_opened_directory', os.path.expanduser("~"))
+            base_name = "document"
+            extension = ".tex"
+
+        # Find the next available copy number in the same directory
+        copy_number = 1
+        while True:
+            candidate = os.path.join(default_dir, f"{base_name}_copy{copy_number}{extension}")
+            if not os.path.exists(candidate):
+                break
+            copy_number += 1
+
+        # Suggest the new filename
+        suggested_name = f"{base_name}_copy{copy_number}{extension}"
+        default_path = os.path.join(default_dir, suggested_name)
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self.main_window,
+            "Save a Copy As",
+            default_path,
+            "TeX files (*.tex);;All files (*.*)"
+        )
+
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith('.tex'):
+            file_path += '.tex'
+
+        # Write the copy without touching the current file data
+        try:
+            directory = os.path.dirname(file_path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+
+            content = current_editor.toPlainText()
+            normalized = content.replace('\r\n', '\n').replace('\r', '\n')
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(normalized)
+
+            self.main_window.update_status_bar(f"Copy saved as: {os.path.basename(file_path)}")
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Save Copy Error", f"Could not save copy:\n{str(e)}")
+
     def _manage_session_files_manually(self, file_path, session_files_list):
         """Manually manage session files as fallback"""
         try:
@@ -2298,40 +2323,6 @@ class EditorManager:
         except Exception as e:
             print(f"❌ Error updating current file tracking: {e}")
             
-    # def set_active_editor(self, file_path):
-        # """Set active editor and update tracking"""
-        # try:
-            # if file_path in self.editor_files:
-                # editor_data = self.editor_files[file_path]
-                # editor = editor_data.get('editor')
-                
-                # if editor:
-                    # # Update current file
-                    # self.update_current_file_tracking(file_path)
-                    
-                    # # Focus the editor
-                    # editor.setFocus()
-                    
-                    # # Switch to correct tab if in tabbed mode
-                    # if self.editor_layout_mode == "tabbed" and self.editor_tabs:
-                        # if isinstance(self.editor_tabs, QTabWidget):
-                            # tab_index = editor_data.get('index', -1)
-                            # if 0 <= tab_index < self.editor_tabs.count():
-                                # self.editor_tabs.setCurrentIndex(tab_index)
-                    
-                    # # Update main window title
-                    # if hasattr(self.main_window, 'update_title'):
-                        # self.main_window.update_title()
-                    
-                    # print(f"✅ Set active editor: {os.path.basename(file_path)}")
-                    # return True
-                    
-        # except Exception as e:
-            # print(f"❌ Error setting active editor: {e}")
-        
-        # return False
-        
-
 
     
     def get_all_open_file_paths(self):
@@ -3925,4 +3916,3 @@ Your content goes here.
         editor = self.get_current_editor()
         if editor and hasattr(editor, 'toggle_bibliography_fold'):
             editor.toggle_bibliography_fold()
-        
