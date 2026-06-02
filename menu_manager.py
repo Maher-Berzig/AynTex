@@ -411,7 +411,15 @@ class MenuManager:
         save_as_action.triggered.connect(self.main_window.editor_manager.save_as_file)
         self.icons_manager.apply_icon_to_action(save_as_action, "save_as")
         file_menu.addAction(save_as_action)
-        file_menu.addSeparator()
+        # Save a Copy As
+        save_copy_action = QAction(tr.get("save_copy_as", "Save a Copy As..."), self.main_window)
+        save_copy_action.setShortcut("Ctrl+Shift+C")           # optional, but distinct
+        save_copy_action.setStatusTip(tr.get("save_copy_as", "Save a copy of the current document under a new name"))
+        save_copy_action.setToolTip(tr.get("tooltip_save_copy_as", "Save a copy without changing the active file"))
+        save_copy_action.triggered.connect(self.main_window.editor_manager.save_copy_as)
+        self.icons_manager.apply_icon_to_action(save_copy_action, "save_copy_as")   # you may need a dedicated icon
+        file_menu.addAction(save_copy_action)
+        file_menu.addSeparator()        
         # Close Tex File
         close_tex_action = QAction(tr["close_tex"], self.main_window)
         close_tex_action.setShortcut("Ctrl+Q")
@@ -553,8 +561,9 @@ class MenuManager:
             btn.setMinimumWidth(260)
             btn.clicked.connect(
                 lambda checked, path=file_path: (
-                    self.recent_files_menu.close(),
-                    self.open_recent_file(path)
+                    self.force_close_all_menus(),
+                    #self.open_recent_file(path)
+                    QTimer.singleShot(0, lambda: self.open_recent_file(path))
                 )
             )
 
@@ -621,10 +630,33 @@ class MenuManager:
             self.main_window.config_manager.remove_recent_file(file_path)
         self.update_recent_files_menu()
 
+    # def open_recent_file(self, file_path):
+        # """Open a recent file (delay opening to let menu close first)"""
+        # if not file_path or not os.path.exists(file_path):
+            # from PyQt5.QtWidgets import QMessageBox
+            # reply = QMessageBox.question(
+                # self.main_window,
+                # "File Not Found",
+                # f"File not found:\n{file_path}\n\nRemove from recent files?",
+                # QMessageBox.Yes | QMessageBox.No
+            # )
+            # if reply == QMessageBox.Yes and hasattr(self.main_window, 'config_manager'):
+                # self.main_window.config_manager.remove_recent_file(file_path)
+                # self.update_recent_files_menu()
+            # return
+
+        # # Delay the actual opening – menu will close during this delay
+        # QTimer.singleShot(30, lambda: (
+            # self.main_window.editor_manager.open_specific_file(file_path),
+            # self.update_recent_files_menu()
+        # ))
+
     def open_recent_file(self, file_path):
-        """Open a recent file (delay opening to let menu close first)"""
+        """Open a recent file with wait cursor for large files"""
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+        from PyQt5.QtCore import Qt
+
         if not file_path or not os.path.exists(file_path):
-            from PyQt5.QtWidgets import QMessageBox
             reply = QMessageBox.question(
                 self.main_window,
                 "File Not Found",
@@ -636,25 +668,111 @@ class MenuManager:
                 self.update_recent_files_menu()
             return
 
-        # Delay the actual opening – menu will close during this delay
-        QTimer.singleShot(30, lambda: (
-            self.main_window.editor_manager.open_specific_file(file_path),
+        # --- Show wait cursor ---
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()  # Force cursor update
+
+        try:
+            # Open the file (this may be slow for large files)
+            self.main_window.editor_manager.open_specific_file(file_path)
             self.update_recent_files_menu()
-        ))
+        finally:
+            # Restore normal cursor
+            QApplication.restoreOverrideCursor()
 
 
     def open_all_recent_files(self):
         """Open all recent files (delayed to allow menu to close)"""
         QTimer.singleShot(10, self._do_open_all_recent_files)
 
+    # def _do_open_all_recent_files(self):
+        # """Actual batch opening after menu has closed"""
+        # if not hasattr(self.main_window, 'config_manager'):
+            # return
+
+        # from PyQt5.QtWidgets import QMessageBox, QProgressDialog
+        # from PyQt5.QtCore import Qt
+        # from PyQt5.QtWidgets import QApplication
+
+        # recent_files = self.main_window.config_manager.get_recent_files()
+        # if not recent_files:
+            # QMessageBox.information(
+                # self.main_window,
+                # "No Recent Files",
+                # "No recent files to open."
+            # )
+            # return
+
+        # # Filter existing files
+        # existing_files = [f for f in recent_files if os.path.exists(f)]
+        # if not existing_files:
+            # QMessageBox.information(
+                # self.main_window,
+                # "No Files Found",
+                # "None of the recent files could be found."
+            # )
+            # return
+
+        # if len(existing_files) > 5:
+            # reply = QMessageBox.question(
+                # self.main_window,
+                # "Open Many Files",
+                # f"This will open {len(existing_files)} files. Continue?",
+                # QMessageBox.Yes | QMessageBox.No
+            # )
+            # if reply != QMessageBox.Yes:
+                # return
+
+        # # Progress dialog (only if many files)
+        # progress = None
+        # if len(existing_files) > 3:
+            # progress = QProgressDialog(
+                # "Opening files...",
+                # "Cancel",
+                # 0,
+                # len(existing_files),
+                # self.main_window
+            # )
+            # progress.setWindowTitle("Opening files, please wait...")
+            # progress.setMinimumWidth(400)
+            # progress.setWindowModality(Qt.WindowModal)
+            # progress.show()
+
+        # opened_count = 0
+        # for i, file_path in enumerate(existing_files):
+            # if progress and progress.wasCanceled():
+                # break
+            # try:
+                # self.main_window.editor_manager.open_specific_file(file_path)
+                # opened_count += 1
+                # if progress:
+                    # progress.setValue(i + 1)
+                    # progress.setLabelText(f"Opened {os.path.basename(file_path)}")
+                    # QApplication.processEvents()
+            # except Exception as e:
+                # print(f"Error opening {file_path}: {e}")
+
+        # if progress:
+            # progress.close()
+
+        # if opened_count > 0:
+            # self.main_window.update_status_bar(f"Opened {opened_count} files")
+        # else:
+            # QMessageBox.warning(
+                # self.main_window,
+                # "Open Error",
+                # "Could not open any recent files."
+            # )
+
+        # self.update_recent_files_menu()
+        
     def _do_open_all_recent_files(self):
-        """Actual batch opening after menu has closed"""
+        """Actual batch opening after menu has closed, with wait cursor"""
+        from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
+        from PyQt5.QtCore import Qt
+
         if not hasattr(self.main_window, 'config_manager'):
             return
-
-        from PyQt5.QtWidgets import QMessageBox, QProgressDialog
-        from PyQt5.QtCore import Qt
-        from PyQt5.QtWidgets import QApplication
 
         recent_files = self.main_window.config_manager.get_recent_files()
         if not recent_files:
@@ -685,48 +803,56 @@ class MenuManager:
             if reply != QMessageBox.Yes:
                 return
 
-        # Progress dialog (only if many files)
-        progress = None
-        if len(existing_files) > 3:
-            progress = QProgressDialog(
-                "Opening files...",
-                "Cancel",
-                0,
-                len(existing_files),
-                self.main_window
-            )
-            progress.setWindowTitle("Opening files, please wait...")
-            progress.setMinimumWidth(400)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.show()
+        # --- Show wait cursor immediately ---
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
 
-        opened_count = 0
-        for i, file_path in enumerate(existing_files):
-            if progress and progress.wasCanceled():
-                break
-            try:
-                self.main_window.editor_manager.open_specific_file(file_path)
-                opened_count += 1
-                if progress:
-                    progress.setValue(i + 1)
-                    progress.setLabelText(f"Opened {os.path.basename(file_path)}")
-                    QApplication.processEvents()
-            except Exception as e:
-                print(f"Error opening {file_path}: {e}")
+        try:
+            # Progress dialog (only if many files)
+            progress = None
+            if len(existing_files) > 3:
+                progress = QProgressDialog(
+                    "Opening files...",
+                    "Cancel",
+                    0,
+                    len(existing_files),
+                    self.main_window
+                )
+                progress.setWindowTitle("Opening files, please wait...")
+                progress.setMinimumWidth(400)
+                progress.setWindowModality(Qt.WindowModal)
+                progress.show()
 
-        if progress:
-            progress.close()
+            opened_count = 0
+            for i, file_path in enumerate(existing_files):
+                if progress and progress.wasCanceled():
+                    break
+                try:
+                    self.main_window.editor_manager.open_specific_file(file_path)
+                    opened_count += 1
+                    if progress:
+                        progress.setValue(i + 1)
+                        progress.setLabelText(f"Opened {os.path.basename(file_path)}")
+                        QApplication.processEvents()
+                except Exception as e:
+                    print(f"Error opening {file_path}: {e}")
 
-        if opened_count > 0:
-            self.main_window.update_status_bar(f"Opened {opened_count} files")
-        else:
-            QMessageBox.warning(
-                self.main_window,
-                "Open Error",
-                "Could not open any recent files."
-            )
+            if progress:
+                progress.close()
 
-        self.update_recent_files_menu()
+            if opened_count > 0:
+                self.main_window.update_status_bar(f"Opened {opened_count} files")
+            else:
+                QMessageBox.warning(
+                    self.main_window,
+                    "Open Error",
+                    "Could not open any recent files."
+                )
+
+            self.update_recent_files_menu()
+        finally:
+            # Restore normal cursor after all files are opened
+            QApplication.restoreOverrideCursor()        
 
     def clear_recent_files(self):
         """Clear all recent files"""
@@ -2115,8 +2241,9 @@ class MenuManager:
             btn.setMinimumWidth(260)
             btn.clicked.connect(
                 lambda checked, path=file_path: (
-                    self.recent_pdf_files_menu.close(),
-                    self.open_recent_pdf_file(path)
+                    self.force_close_all_menus(),
+                    #self.open_recent_pdf_file(path)
+                    QTimer.singleShot(0, lambda: self.open_recent_pdf_file(path))
                 )
             )
 
@@ -2160,6 +2287,25 @@ class MenuManager:
         clear_action.triggered.connect(self.clear_recent_pdf_files)
         self.recent_pdf_files_menu.addAction(clear_action)
 
+    def force_close_all_menus(self):
+        """Forcibly close any open popup menu (including submenus)"""
+        from PyQt5.QtWidgets import QApplication, QMenu
+        # Close the active popup widget (the menu that is currently open)
+        popup = QApplication.activePopupWidget()
+        if popup and isinstance(popup, QMenu):
+            popup.close()
+        # Also close any top-level menus that might still be visible
+        for widget in QApplication.topLevelWidgets():
+            if widget.isVisible() and isinstance(widget, QMenu):
+                widget.close()
+        # Tell the menu bar to release its active action
+        menu_bar = self.main_window.menuBar()
+        if menu_bar:
+            menu_bar.setActiveAction(None)
+            menu_bar.clearFocus()
+        # Force Qt to process pending close events
+        QApplication.processEvents()
+
     def _remove_recent_pdf_file_and_refresh(self, file_path):
         """Remove a single PDF file from recent list and refresh the menu."""
         if hasattr(self.main_window, 'config_manager'):
@@ -2167,28 +2313,61 @@ class MenuManager:
         self.update_recent_pdf_files_menu()
         
     
+    # def open_recent_pdf_file(self, file_path):
+        # """Open a PDF from the recent files list"""
+        # if not os.path.exists(file_path):
+            # print(f"❌ Recent PDF file not found: {file_path}")
+            # # Remove from recent list since it doesn't exist
+            # if hasattr(self.main_window, 'config_manager'):
+                # self.main_window.config_manager.remove_recent_pdf_file(file_path)
+                # # Update menu to reflect the removal
+                # if hasattr(self.main_window, 'menu_manager') and hasattr(self.main_window.menu_manager, 'update_recent_pdf_files_menu'):
+                    # self.main_window.menu_manager.update_recent_pdf_files_menu()
+            # return None
+        # # Load the PDF
+        # viewer = self.main_window.pdf_manager.load_pdf_in_viewer(file_path)
+        # if viewer:
+            # # Move to top of recent list (since it was accessed again)
+            # if hasattr(self.main_window, 'config_manager'):
+                # self.main_window.config_manager.add_recent_pdf_file(file_path)
+            # # Update menu
+            # if hasattr(self.main_window, 'menu_manager') and hasattr(self.main_window.menu_manager, 'update_recent_pdf_files_menu'):
+                # self.main_window.menu_manager.update_recent_pdf_files_menu()
+            # self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
+        # return viewer
+
     def open_recent_pdf_file(self, file_path):
-        """Open a PDF from the recent files list"""
+        """Open a recent PDF file with wait cursor for large PDFs"""
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import Qt
+
         if not os.path.exists(file_path):
             print(f"❌ Recent PDF file not found: {file_path}")
-            # Remove from recent list since it doesn't exist
             if hasattr(self.main_window, 'config_manager'):
                 self.main_window.config_manager.remove_recent_pdf_file(file_path)
-                # Update menu to reflect the removal
-                if hasattr(self.main_window, 'menu_manager') and hasattr(self.main_window.menu_manager, 'update_recent_pdf_files_menu'):
+                if hasattr(self.main_window, 'menu_manager'):
                     self.main_window.menu_manager.update_recent_pdf_files_menu()
             return None
-        # Load the PDF
-        viewer = self.main_window.pdf_manager.load_pdf_in_viewer(file_path)
-        if viewer:
-            # Move to top of recent list (since it was accessed again)
-            if hasattr(self.main_window, 'config_manager'):
-                self.main_window.config_manager.add_recent_pdf_file(file_path)
-            # Update menu
-            if hasattr(self.main_window, 'menu_manager') and hasattr(self.main_window.menu_manager, 'update_recent_pdf_files_menu'):
-                self.main_window.menu_manager.update_recent_pdf_files_menu()
-            self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
-        return viewer
+
+        # --- Show wait cursor ---
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+
+        try:
+            # Load the PDF (may take time for large files)
+            viewer = self.main_window.pdf_manager.load_pdf_in_viewer(file_path)
+            if viewer:
+                # Move to top of recent list
+                if hasattr(self.main_window, 'config_manager'):
+                    self.main_window.config_manager.add_recent_pdf_file(file_path)
+                # Update menu
+                if hasattr(self.main_window, 'menu_manager'):
+                    self.main_window.menu_manager.update_recent_pdf_files_menu()
+                self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
+            return viewer
+        finally:
+            # Restore normal cursor
+            QApplication.restoreOverrideCursor()
 
     def remove_recent_pdf_file(self, file_path):
         """Remove a specific PDF file from the recent list."""
