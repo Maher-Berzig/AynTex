@@ -47,8 +47,9 @@ translations = {
         "open": "Open",
         "open_pdf": "Open PDF",
         "save": "Save",
-        "save_as": "Save As",
-        "save_all": "Save All",
+        "save_as": "Save As...",
+        "save_copy_as": "Save a Copy As...",
+        "save_all": "Save All TeX files",
         "save_changes": "Save Changes?",
         "save_changes_message": "The document ''{}'' has unsaved changes. Do you want to save before closing?",
         "exit": "Exit",
@@ -373,6 +374,7 @@ translations = {
         "status_view_ayntex_error_log": "View AynTex error and freeze log",
 
         # Tooltip
+        "tooltip_save_copy_as": "Save a copy of the document without changing the active file",
         "tooltip_currently_rtl": "Currently RTL - Click to switch to Left-to-Right",
         "tooltip_currently_ltr": "Currently LTR - Click to switch to Right-to-Left",
         "tooltip_go_to_line": "Go to a specific line number",
@@ -780,8 +782,9 @@ translations = {
         "open": "فتح",
         "open_pdf": "عرض",
         "save": "حفظ",
-        "save_as": "حفظ باسم",
-        "save_all": "حفظ الكل",
+        "save_as": "حفظ باسم...",
+        "save_copy_as": "حفظ نسخة باسم...",
+        "save_all": "حفظ جميع ملفات لاتاك",
         "save_changes": "حفظ التغييرات؟",
         "save_changes_message": "المستند {} يحتوي على تغييرات غير محفوظة. هل تريد الحفظ قبل الإغلاق؟",
         "exit": "خروج",
@@ -1110,6 +1113,7 @@ translations = {
         "status_view_ayntex_error_log": "عرض خطأ عينتاك وسِجل التجميد",
 
         # Tooltip
+        "tooltip_save_copy_as": "حفظ نسخة من المستند دون تغيير الملف الحالي",
         "tooltip_currently_rtl": "حاليًا من اليمين إلى اليسار - انقر للتبديل من اليسار إلى اليمين",
         "tooltip_currently_ltr": "حاليًا - انقر للتبديل من اليمين إلى اليسار",
         "tooltip_go_to_line": "الانتقال إلى رقم سطر محدد",
