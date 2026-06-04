@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QApplication, QSizePolicy, QLineEdit, QToolButton, QHBoxLayout,
     QColorDialog, QInputDialog, QMessageBox, QFileDialog, QMenu, QAction
 )
-from PyQt5.QtCore import Qt, QRect, QProcess, QTimer,  QPoint, QEvent, QSize
+from PyQt5.QtCore import Qt, QRect, QProcess, QTimer,  QPoint, QEvent, QSize, QObject
 from PyQt5.QtGui import (
     QIcon, QPixmap, QPainter, QPen, QCursor, QTextCursor, QColor, QBrush, QPixmap, QPainterPath
 )    
@@ -138,6 +138,48 @@ class MarginInputDialog(QDialog):
         except ValueError:
             # Return default 2.5 cm in points if invalid input
             return 2.5 * 28.35
+
+class _SpinboxFocusGuard(QObject):
+    """Event filter installed on QSpinBox widgets inside a PDFViewer toolbar.
+
+    Problem: the PDFViewer lives inside a QTabWidget which is itself nested
+    inside several other container widgets.  Qt's focus machinery sometimes
+    routes a FocusOut event to the spinbox immediately after a mouse click
+    (before the click is fully processed), effectively preventing the user
+    from typing into it.  The culprit is usually the scroll_area or the
+    QTabWidget calling setFocus() on itself as a side-effect of a click
+    anywhere in the pane.
+
+    Fix: when the spinbox receives FocusOut and the new focus owner is NOT
+    another interactive input widget the user deliberately clicked (i.e. it
+    is the scroll_area or one of its scrollbars), we schedule an immediate
+    re-focus of the spinbox so the user's interaction is not lost.
+    """
+
+    def __init__(self, viewer):
+        super().__init__(viewer)
+        self._viewer = viewer
+
+    def eventFilter(self, spinbox, event):
+        if event.type() == QEvent.FocusOut:
+            new_focus = QApplication.focusWidget()
+            # If focus is moving to the PDF scroll area or its scrollbars,
+            # give it back to the spinbox — the user did not ask to leave.
+            if new_focus is not None:
+                scroll = getattr(self._viewer, 'scroll_area', None)
+                if scroll is not None:
+                    unwanted_targets = {
+                        scroll,
+                        scroll.verticalScrollBar(),
+                        scroll.horizontalScrollBar(),
+                        getattr(self._viewer, 'content_widget', None),
+                    }
+                    if new_focus in unwanted_targets:
+                        # Re-focus spinbox after the current event loop tick.
+                        QTimer.singleShot(0, spinbox.setFocus)
+                        return False   # Let the FocusOut propagate normally but override it
+        return False   # Never swallow events — just observe them
+
 
 class PDFViewer(QWidget):
     """Custom PDF viewer with scrolling, zoom, navigation, text selection, and SyncTeX reverse search"""
@@ -319,6 +361,9 @@ class PDFViewer(QWidget):
         self.page_spinbox.setEnabled(False)
         self.page_spinbox.setFixedSize(60, BUTTON_HEIGHT)
         self.page_spinbox.setToolTip("Current page (editable)")
+        # ClickFocus ensures the spinbox gets focus on a single click even when
+        # it lives inside a deeply-nested QTabWidget hierarchy.
+        self.page_spinbox.setFocusPolicy(Qt.ClickFocus)
         self.page_spinbox.valueChanged.connect(self.go_to_page_number)
         main_toolbar_layout.addWidget(self.page_spinbox)
         
@@ -358,6 +403,8 @@ class PDFViewer(QWidget):
         self.zoom_spinbox.setSuffix("%")
         self.zoom_spinbox.setFixedSize(60, BUTTON_HEIGHT)
         self.zoom_spinbox.setToolTip("Zoom percentage (editable)")
+        # ClickFocus: same as page_spinbox above.
+        self.zoom_spinbox.setFocusPolicy(Qt.ClickFocus)
         main_toolbar_layout.addWidget(self.zoom_spinbox)
         
         zoom_in_btn = QPushButton()
@@ -871,6 +918,14 @@ class PDFViewer(QWidget):
         self.main_toolbar_widget.setObjectName("Toolbar")
         self.search_container.setObjectName("Toolbar")
 
+        # Install a lightweight event filter on both spinboxes.
+        # Its only job is to consume any FocusOut event that was caused by
+        # the QTabWidget / scroll_area focus machinery, so the spinbox keeps
+        # focus long enough for the user to type or scroll a value.
+        self._spinbox_guard = _SpinboxFocusGuard(self)
+        self.page_spinbox.installEventFilter(self._spinbox_guard)
+        self.zoom_spinbox.installEventFilter(self._spinbox_guard)
+
     def _apply_annotation_toolbar_theme(self):
         """Apply current theme to annotation toolbar — call at init and on theme change."""
         from style_manager import get_annotation_style
@@ -1085,36 +1140,6 @@ class PDFViewer(QWidget):
                     QMessageBox.critical(self.window(), "Error",
                                          f"Failed to add sticky note: {str(e)}")
                 
-    
-    # def _show_annotation_toolbar(self):
-        # """Show the annotation toolbar"""
-        # self.annotation_toolbar_widget.setVisible(True)
-        # self.annotations_btn.setChecked(True)
-        # self.annotations_btn.setStyleSheet("background-color: #4CAF50;")
-        # self.main_window.update_status_bar("Select a tool to start annotating")
-        # #self._update_annot_status("Select a tool to start annotating")
-    
-        
-    # def _hide_annotation_toolbar(self):
-        # """Hide the annotation toolbar"""
-        # if self.annotations_modified:
-            # msgbox = QMessageBox(self.window())
-            # msgbox.setWindowTitle("Unsaved Annotations")
-            # msgbox.setText("You have unsaved annotations. Do you want to save before closing?")
-            # msgbox.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
-            # msgbox.setDefaultButton(QMessageBox.Save)
-
-            # result = self._exec_dialog_safe(msgbox)
-            # if result == QMessageBox.Save:
-                # self._save_annotations_as()
-            # elif result == QMessageBox.Cancel:
-                # return
-
-        # self.annotation_toolbar_widget.setVisible(False)
-        # self.annotations_btn.setChecked(False)
-        # self.annotations_btn.setStyleSheet("")
-        # self._clear_annotation_tool()
-        # self._clear_annotation_selection() 
 
     def _hide_annotation_toolbar(self):
         """Hide the annotation toolbar"""
@@ -1980,22 +2005,6 @@ class PDFViewer(QWidget):
     # ANNOTATION SAVE METHODS
     # ═══════════════════════════════════════════════════════════════════════════════
     
-    # def _save_and_refresh_annotations(self):
-        # """Save changes incrementally and refresh display"""
-        # if not self.pdf_document:
-            # return
-        
-        # self.annotations_modified = True
-        
-        # # Try incremental save
-        # try:
-            # self.pdf_document.saveIncr()
-        # except:
-            # pass  # Some PDFs don't support incremental save
-        
-        # # Re-render all pages to show annotation changes
-        # self.render_all_pages()
-
     def _save_and_refresh_annotations(self):
         """Save changes and refresh display — uses in-memory round-trip to guarantee persistence"""
         if not self.pdf_document:
@@ -2439,18 +2448,6 @@ class PDFViewer(QWidget):
         self.scroll_area.setFocus(Qt.OtherFocusReason)
         self.content_widget.setFocus(Qt.OtherFocusReason)
     
-
-    # def _handle_escape(self):
-        # """Handle Escape key"""
-        # if self.search_toolbar_visible:
-            # self.hide_search_toolbar()
-
-    # def _handle_print(self):
-        # """Handle Ctrl+P for printing"""
-        # if hasattr(self, 'print_btn') and self.print_btn.isEnabled():
-            # self.print_pdf()
-        
-
     def fit_to_text_width(self):
         """Fit PDF to text width by excluding margins - opens dialog for margin input"""
         if not self.pdf_document or len(self.pdf_document) == 0:
@@ -2579,36 +2576,36 @@ class PDFViewer(QWidget):
             h_scrollbar.setValue(0)
         
 
-    # def _scroll_by(self, amount):
-        # """Scroll vertically by amount"""
-        # scrollbar = self.scroll_area.verticalScrollBar()
-        # scrollbar.setValue(scrollbar.value() + amount)
-        # self._ensure_focus_after_action()
+    def _scroll_by(self, amount):
+        """Scroll vertically by amount"""
+        scrollbar = self.scroll_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.value() + amount)
+        self._ensure_focus_after_action()
 
-    # def _scroll_horizontal(self, amount):
-        # """Scroll horizontally by amount"""
-        # scrollbar = self.scroll_area.horizontalScrollBar()
-        # scrollbar.setValue(scrollbar.value() + amount)
-        # self._ensure_focus_after_action()
+    def _scroll_horizontal(self, amount):
+        """Scroll horizontally by amount"""
+        scrollbar = self.scroll_area.horizontalScrollBar()
+        scrollbar.setValue(scrollbar.value() + amount)
+        self._ensure_focus_after_action()
 
-    # def _scroll_page_down(self):
-        # """Scroll down by one viewport height"""
-        # scrollbar = self.scroll_area.verticalScrollBar()
-        # scrollbar.setValue(scrollbar.value() + self.scroll_area.viewport().height())
-        # self._ensure_focus_after_action()
+    def _scroll_page_down(self):
+        """Scroll down by one viewport height"""
+        scrollbar = self.scroll_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.value() + self.scroll_area.viewport().height())
+        self._ensure_focus_after_action()
 
-    # def _scroll_page_up(self):
-        # """Scroll up by one viewport height"""
-        # scrollbar = self.scroll_area.verticalScrollBar()
-        # scrollbar.setValue(scrollbar.value() - self.scroll_area.viewport().height())
-        # self._ensure_focus_after_action()
+    def _scroll_page_up(self):
+        """Scroll up by one viewport height"""
+        scrollbar = self.scroll_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.value() - self.scroll_area.viewport().height())
+        self._ensure_focus_after_action()
 
-    # def _reset_zoom(self):
-        # """Reset zoom to 100%"""
-        # self.zoom_factor = 1.0
-        # self.update_zoom_display()
-        # self.render_all_pages()
-        # self._ensure_focus_after_action()
+    def _reset_zoom(self):
+        """Reset zoom to 100%"""
+        self.zoom_factor = 1.0
+        self.update_zoom_display()
+        self.render_all_pages()
+        self._ensure_focus_after_action()
     
         
     def set_toolbar_visible(self, visible):
@@ -4655,6 +4652,43 @@ class PDFViewer(QWidget):
         
         
     
+    def reload_pdf_preserving_position(self, pdf_path):
+        """Reload the PDF file while keeping the current scroll position and page.
+
+        Use this instead of bare ``load_pdf()`` whenever the content changes
+        (e.g. after LaTeX recompilation or manual refresh) so that the user's
+        reading position is not lost.
+        """
+        # --- save state ---
+        saved_scroll_y = self.scroll_area.verticalScrollBar().value()
+        saved_scroll_x = self.scroll_area.horizontalScrollBar().value()
+        saved_zoom     = self.zoom_factor
+
+        # --- reload (load_pdf resets scroll to 0 internally) ---
+        ok = self.load_pdf(pdf_path)
+
+        if not ok:
+            return False
+
+        # Restore zoom without re-rendering a second time (load_pdf already rendered)
+        if abs(self.zoom_factor - saved_zoom) > 0.001:
+            self.zoom_factor = saved_zoom
+            self.update_zoom_display()
+            self.render_all_pages()
+
+        # Restore scroll position after the event loop has settled the new layout.
+        def _restore():
+            v_bar = self.scroll_area.verticalScrollBar()
+            h_bar = self.scroll_area.horizontalScrollBar()
+            # Clamp to actual maximum in case the recompiled PDF is shorter
+            v_bar.setValue(min(saved_scroll_y, v_bar.maximum()))
+            h_bar.setValue(min(saved_scroll_x, h_bar.maximum()))
+            # Keep the page indicator consistent with the restored position
+            self.on_scroll_changed(v_bar.value())
+
+        QTimer.singleShot(50, _restore)
+        return True
+
     def load_pdf(self, pdf_path):
         """Load PDF file - DEBUGGED VERSION"""
         if not self.is_valid:
@@ -4973,7 +5007,7 @@ class PDFViewer(QWidget):
         if not self.pdf_document or page_index < 0 or page_index >= self.total_pages:
             return
         
-        print(f"📍 Jumping to page {page_index + 1}, x={x}, y={y}")
+        #print(f"📍 Jumping to page {page_index + 1}, x={x}, y={y}")
         
         # Add to navigation history before jumping
         if not self.is_navigating_history:
@@ -5546,24 +5580,33 @@ class PDFViewer(QWidget):
         if event.type() == QEvent.KeyPress:
             if event.modifiers() == Qt.AltModifier:
                 if event.key() in [Qt.Key_Left, Qt.Key_Right]:
-                    print(f"🔄 Tab widget calling viewer method directly")
-                    # Call the method directly instead of forwarding event
+                    # Navigate back/forward via the viewer directly
                     if event.key() == Qt.Key_Left:
-                        self.viewer.navigate_back()
+                        self.navigate_back()
                     else:
-                        self.viewer.navigate_forward()
+                        self.navigate_forward()
                     event.accept()
                     return True  # Consume event
-        # Prevent focus loss when interacting with scrollbars
+
+        # Prevent focus loss when interacting with scrollbars, BUT do NOT steal
+        # focus when the user is clicking on one of the viewer's own toolbar
+        # widgets (page spinbox, zoom spinbox, buttons, etc.).
         if obj == self.scroll_area:
-            if event.type() == event.FocusOut:
-                # If focus is moving to a scrollbar, prevent it
+            if event.type() == QEvent.FocusOut:
                 new_focus = QApplication.focusWidget()
-                if new_focus and (new_focus == self.scroll_area.verticalScrollBar() or 
-                                new_focus == self.scroll_area.horizontalScrollBar()):
-                    # Keep focus on scroll area
-                    QTimer.singleShot(0, lambda: self.scroll_area.setFocus(Qt.OtherFocusReason))
-        
+                if new_focus is not None:
+                    # Only reclaim focus if it moved to a scrollbar child of this
+                    # viewer — never if it moved to a spinbox, button, or any other
+                    # interactive control (which the user intentionally clicked).
+                    is_own_scrollbar = (
+                        new_focus == self.scroll_area.verticalScrollBar()
+                        or new_focus == self.scroll_area.horizontalScrollBar()
+                    )
+                    if is_own_scrollbar:
+                        QTimer.singleShot(0, lambda: self.scroll_area.setFocus(Qt.OtherFocusReason))
+                    # For all other widgets (spinboxes, buttons, etc.) let focus
+                    # move freely — do nothing.
+
         return super().eventFilter(obj, event)
     
     def extract_selected_text(self):
@@ -5660,51 +5703,102 @@ class PDFViewer(QWidget):
             self._print_with_system_viewer()
     
     def _print_to_printer(self, printer):
-        """Print PDF pages to the specified printer"""
+        """Print PDF pages to the specified printer.
+
+        Strategy (best → fallback):
+          1. SVG path  – fitz renders the page as SVG; Qt parses and draws it
+                         as resolution-independent vectors.  Perfect quality at
+                         any DPI.  Requires PyQt5.QtSvg.
+          2. High-res pixmap – render at printer DPI, scale to fill the page.
+                         Good quality but still raster-limited.
+        """
         if not PRINT_SUPPORT_AVAILABLE:
             return
-        
-        painter = QPainter(printer)    
-        try:            
+
+        # Detect SVG support once.
+        try:
+            from PyQt5.QtSvg import QSvgRenderer
+            svg_support = True
+        except ImportError:
+            svg_support = False
+
+        painter = QPainter(printer)
+        try:
             if not painter.isActive():
                 return
-            
+
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
+
             # Get page range from printer settings
             from_page = printer.fromPage() if printer.fromPage() > 0 else 1
-            to_page = printer.toPage() if printer.toPage() > 0 else self.total_pages
-            
-            # Ensure valid page range
+            to_page   = printer.toPage()   if printer.toPage()   > 0 else self.total_pages
+
             from_page = max(1, min(from_page, self.total_pages))
-            to_page = max(from_page, min(to_page, self.total_pages))
-            
-            # Print each page
-            for page_num in range(from_page - 1, to_page):  # Convert to 0-based index
-                if page_num > from_page - 1:  # Not the first page
+            to_page   = max(from_page, min(to_page, self.total_pages))
+
+            printer_rect = printer.pageRect()
+
+            for page_num in range(from_page - 1, to_page):
+                if page_num > from_page - 1:
                     printer.newPage()
-                
-                # Get page as pixmap
+
                 page = self.pdf_document[page_num]
-                mat = fitz.Matrix(2.0, 2.0)  # Higher resolution for printing
-                pix = page.get_pixmap(matrix=mat)
-                
-                # Convert to QPixmap
-                img_data = pix.tobytes("ppm")
-                pixmap = QPixmap()
-                pixmap.loadFromData(img_data)
-                
-                # Scale to fit printer page
-                printer_rect = printer.pageRect()
-                scaled_pixmap = pixmap.scaled(
-                    printer_rect.size(), 
-                    Qt.KeepAspectRatio, 
-                    Qt.SmoothTransformation
-                )
-                
-                # Center on page
-                x = (printer_rect.width() - scaled_pixmap.width()) // 2
-                y = (printer_rect.height() - scaled_pixmap.height()) // 2
-                
-                painter.drawPixmap(x, y, scaled_pixmap)
+
+                # ── Method 1: vector SVG ──────────────────────────────────
+                drawn = False
+                if svg_support:
+                    try:
+                        svg_bytes = page.get_svg_image()
+                        if isinstance(svg_bytes, str):
+                            svg_bytes = svg_bytes.encode("utf-8")
+                        renderer = QSvgRenderer(svg_bytes)
+                        if renderer.isValid():
+                            # Compute destination rect that fills the printable
+                            # area while preserving the page aspect ratio.
+                            vb = renderer.viewBoxF()
+                            if vb.width() > 0 and vb.height() > 0:
+                                scale = min(
+                                    printer_rect.width()  / vb.width(),
+                                    printer_rect.height() / vb.height()
+                                )
+                                dest_w = vb.width()  * scale
+                                dest_h = vb.height() * scale
+                            else:
+                                dest_w = printer_rect.width()
+                                dest_h = printer_rect.height()
+
+                            from PyQt5.QtCore import QRectF
+                            dest_rect = QRectF(
+                                (printer_rect.width()  - dest_w) / 2,
+                                (printer_rect.height() - dest_h) / 2,
+                                dest_w, dest_h
+                            )
+                            renderer.render(painter, dest_rect)
+                            drawn = True
+                    except Exception:
+                        pass  # Fall through to pixmap method
+
+                # ── Method 2: high-res pixmap fallback ───────────────────
+                if not drawn:
+                    printer_dpi = printer.resolution()
+                    scale = printer_dpi / 72.0
+                    mat = fitz.Matrix(scale, scale)
+                    pix = page.get_pixmap(matrix=mat)
+
+                    img_data = pix.tobytes("ppm")
+                    pixmap = QPixmap()
+                    pixmap.loadFromData(img_data)
+
+                    scaled_pixmap = pixmap.scaled(
+                        printer_rect.size(),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+                    x = (printer_rect.width()  - scaled_pixmap.width())  // 2
+                    y = (printer_rect.height() - scaled_pixmap.height()) // 2
+                    painter.drawPixmap(x, y, scaled_pixmap)
             
             
             
@@ -6859,4 +6953,3 @@ class SelectablePageLabel(QLabel):
             center_x, center_y - crosshair_size,
             center_x, center_y + crosshair_size
         )
-        
