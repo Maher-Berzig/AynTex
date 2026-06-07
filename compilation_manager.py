@@ -365,7 +365,9 @@ class CompilationManager(QObject):
             self.main_window.update_status_bar(
                 self.main_window.translations[self.main_window.menu_language]["status_compile_success"].format(engine)
             )
-            QTimer.singleShot(400, self.auto_refresh_pdf)
+            # NOTE: PDF auto-load is handled by on_latex_process_finished_with_cleanup
+            # via _auto_load_pdf_after_compilation. Do NOT start a second timer here
+            # or the two loaders will race and the first compilation may show no PDF.
         else:
             self.main_window.update_status_bar("❌ Compilation failed")
             self.main_window.update_status_bar(
@@ -597,10 +599,24 @@ class CompilationManager(QObject):
                 if hasattr(self.main_window, 'toolbar_manager'):
                     self.main_window.toolbar_manager.update_compile_actions(compiling=False)
                 return
-                
+
+            # Save and restore the editor's cursor position so that the
+            # processEvents() call below (which can repaint / re-layout the
+            # editor) does not cause an unexpected scroll jump.
+            _cur_editor = self.main_window.editor_manager.get_current_editor()
+            _saved_cursor = _cur_editor.textCursor() if _cur_editor else None
+            _saved_scroll = (
+                _cur_editor.verticalScrollBar().value() if _cur_editor else 0
+            )
+
             self.main_window.editor_manager.update_editor_display(current_file)
             self.main_window.update_title()
             QApplication.processEvents()
+
+            # Restore cursor/scroll after processEvents
+            if _cur_editor and _saved_cursor:
+                _cur_editor.setTextCursor(_saved_cursor)
+                _cur_editor.verticalScrollBar().setValue(_saved_scroll)
             
             current_file = self.main_window.editor_manager.current_file
             if current_file and current_file in self.main_window.editor_manager.editor_files:
@@ -741,7 +757,19 @@ class CompilationManager(QObject):
     def on_latex_process_finished_with_cleanup(self, exit_code, exit_status):
         """Enhanced LaTeX process finished handler with proper UI updates and PDF loading"""
         #print(f"LaTeX process finished: exit_code={exit_code}, exit_status={exit_status}")
-        
+
+        # ── Save editor cursor/scroll position before any UI work ──────────
+        # focus_appropriate_tab calls processEvents() which can cause Qt to
+        # re-layout the editor and scroll it to an arbitrary position.
+        # We save state here and restore it at the end of this method.
+        _em = getattr(self.main_window, 'editor_manager', None)
+        _cur_editor = _em.get_current_editor() if _em else None
+        _saved_cursor = _cur_editor.textCursor() if _cur_editor else None
+        _saved_scroll = (
+            _cur_editor.verticalScrollBar().value() if _cur_editor else 0
+        )
+        # ───────────────────────────────────────────────────────────────────
+
         # Clean up timeout timer
         if hasattr(self, 'compilation_timeout_timer'):
             self.compilation_timeout_timer.stop()
@@ -781,6 +809,12 @@ class CompilationManager(QObject):
             # Keep the original error status
             if not hasattr(self.main_window, 'update_status_bar') or "failed" not in self.main_window.statusBar().currentMessage():
                 self.main_window.update_status_bar("Compilation failed - no PDF generated")
+
+        # ── Restore editor cursor/scroll position ──────────────────────────
+        if _cur_editor and _saved_cursor:
+            _cur_editor.setTextCursor(_saved_cursor)
+            _cur_editor.verticalScrollBar().setValue(_saved_scroll)
+        # ───────────────────────────────────────────────────────────────────
 
         # Append clickable log link now that all stdout has been collected
         self._append_log_link(self.compilation_output)
@@ -842,17 +876,19 @@ class CompilationManager(QObject):
             print(f"Error in auto PDF loading: {e}")
 
     def _load_pdf_safely(self, pdf_path):
-        """Safely load PDF with error handling"""
+        """Safely load/reload PDF with error handling.
+
+        Always calls reload_pdf (not load_pdf_in_viewer) so that an existing
+        viewer has its *content* refreshed, not just brought to the foreground.
+        reload_pdf falls back to load_pdf_in_viewer automatically when no viewer
+        exists yet (first compilation).
+        """
         try:
             if hasattr(self.main_window, 'pdf_manager'):
-                #print(f"Loading PDF in viewer: {pdf_path}")
-                self.main_window.pdf_manager.load_pdf_in_viewer(pdf_path)
-                self.main_window.update_status_bar(f"PDF loaded successfully: {os.path.basename(pdf_path)}")
-            #else:
-            #    print("PDF manager not available")
+                self.main_window.pdf_manager.reload_pdf(pdf_path)
+                self.main_window.update_status_bar(f"PDF loaded: {os.path.basename(pdf_path)}")
         except Exception as e:
             print(f"Error loading PDF in viewer: {e}")
-            # Don't show error dialog for PDF loading issues - just log it
             self.main_window.update_status_bar("PDF compilation completed - manual PDF viewing required")
 
     def stop_compilation(self):
@@ -1111,20 +1147,17 @@ class CompilationManager(QObject):
                 
                 #print(f"DEBUG: Expected PDF not found: {getattr(self, '_last_compiled_pdf_path', 'None')}")
         
-        if exit_code == 0 and not has_errors and pdf_created:
+        if pdf_created:
             self.main_window.update_status_bar("Compilation successful")
-            if hasattr(self.main_window, 'pdf_manager'):
-                self.main_window.pdf_manager.reload_pdf(self._last_compiled_pdf_path)
-                viewer = self.main_window.pdf_manager.load_pdf_in_viewer(self._last_compiled_pdf_path)
-                if viewer:
-                    viewer.setFocus()
+            # NOTE: PDF reloading is handled by the caller
+            # (on_latex_process_finished_with_cleanup → _auto_load_pdf_after_compilation).
+            # Do NOT call reload_pdf here — it would trigger a second concurrent reload
+            # that can hit the viewer while it is still mid-render from the first call,
+            # leading to a crash when the user clicks the viewer.
         else:
-            if not pdf_created:
-                self.main_window.update_status_bar(
-                    "Compilation completed but no PDF generated - check output"
-                )
-            else:
-                self.main_window.update_status_bar("Compilation failed - check output")
+            self.main_window.update_status_bar(
+                "Compilation completed but no PDF generated - check output"
+            )
         
         self.cleanup_process()
 
