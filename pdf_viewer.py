@@ -110,7 +110,10 @@ class MarginInputDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
-        
+
+        # Also accept on Enter in the text field
+        self.margin_input.returnPressed.connect(self.accept)
+
         # Focus on input field
         self.margin_input.setFocus()
         self.margin_input.selectAll()
@@ -443,7 +446,7 @@ class PDFViewer(QWidget):
             fit_text_width_btn.setStyleSheet("font-weight: bold;")
         fit_text_width_btn.setToolTip("Fit to Text Width (exclude margins)")
         fit_text_width_btn.setFixedSize(BUTTON_HEIGHT, BUTTON_HEIGHT)
-        fit_text_width_btn.clicked.connect(self.fit_to_text_width)
+        fit_text_width_btn.clicked.connect(lambda: QTimer.singleShot(0, self.fit_to_text_width))
         main_toolbar_layout.addWidget(fit_text_width_btn)
         
         # ✅ NEW: Fit Page to Window button
@@ -1052,29 +1055,26 @@ class PDFViewer(QWidget):
                 self.main_window.statusBar().showMessage("Annotation mode closed", 2000)
 
     def _exec_dialog_safe(self, dialog):
-        """Execute a modal dialog safely, preventing focus/grab interference.
-        
-        Fixes the issue where dialog buttons (Ok/Cancel) require multiple clicks
-        when called from annotation mode.
-        """
-        # Release any explicit mouse grab that might be active
+        """Execute a modal dialog safely, preventing focus/grab interference."""
         app = QApplication.instance()
 
+        # Release any explicit mouse grab that might be active
         grabber = None
         if hasattr(app, "mouseGrabber"):
             grabber = app.mouseGrabber()
-
-        #grabber = QApplication.instance().mouseGrabWidget()
         if grabber:
             grabber.releaseMouse()
 
-        # Temporarily disable mouse tracking on all page labels
-        # to prevent mouseMoveEvent from firing and interfering
+        # Temporarily disable mouse tracking AND mouse events on all page labels
+        # to prevent mousePressEvent from stealing focus while the dialog is open.
         tracked = []
         for label in self.page_labels:
             if label.hasMouseTracking():
                 label.setMouseTracking(False)
                 tracked.append(label)
+            # setAttribute WA_TransparentForMouseEvents makes the label ignore
+            # all mouse events for the duration of the dialog.
+            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         # Temporarily remove the event filter on the scroll area
         filter_removed = False
@@ -1093,6 +1093,13 @@ class PDFViewer(QWidget):
         try:
             result = dialog.exec_()
         finally:
+            # Re-enable mouse events on page labels
+            for label in self.page_labels:
+                try:
+                    label.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+                except RuntimeError:
+                    pass
+
             # Restore mouse tracking
             for label in tracked:
                 try:
@@ -1611,7 +1618,7 @@ class PDFViewer(QWidget):
             self._save_and_refresh_annotations()
             self.main_window.update_status_bar("Ink annotation added")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to add ink annotation: {str(e)}")
+            QMessageBox.critical(self.window(), "Error", f"Failed to add ink annotation: {str(e)}")
         finally:
             self.annotation_ink_points = []
     
@@ -1667,7 +1674,7 @@ class PDFViewer(QWidget):
                 self.main_window.update_status_bar(f"{self.annotation_tool.capitalize()} added")
                 #self._update_annot_status(f"{self.annotation_tool.capitalize()} added")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to add shape: {str(e)}")
+            QMessageBox.critical(self.window(), "Error", f"Failed to add shape: {str(e)}")
         finally:
             self.annotation_start_pos = None
     
@@ -2031,7 +2038,7 @@ class PDFViewer(QWidget):
     def _save_annotations(self):
         """Save annotations into the currently open PDF file (atomic temp-file swap)."""
         if not self.pdf_document or not self.current_pdf_path:
-            QMessageBox.warning(self, "Warning", "No PDF document loaded.")
+            QMessageBox.warning(self.window(), "Warning", "No PDF document loaded.")
             return
 
         import shutil, tempfile, os
@@ -2106,7 +2113,7 @@ class PDFViewer(QWidget):
     def _save_annotations_as(self):
         """Save annotated PDF to a new file - WORKAROUND for PyMuPDF crash on Windows"""
         if not self.pdf_document or not self.current_pdf_path:
-            QMessageBox.warning(self, "Warning", "No PDF document loaded")
+            QMessageBox.warning(self.window(), "Warning", "No PDF document loaded")
             return
         
         # Suggest default filename
@@ -2453,8 +2460,10 @@ class PDFViewer(QWidget):
         if not self.pdf_document or len(self.pdf_document) == 0:
             return
         
-        # Show margin input dialog
-        dialog = MarginInputDialog(self)
+        # Show margin input dialog.
+        # Parent must be the top-level window (not the PDFViewer widget) so that
+        # Qt delivers mouse events to the dialog buttons on the first click.
+        dialog = MarginInputDialog(self.window())
         if dialog.exec_() != QDialog.Accepted:
             return  # User cancelled
         
@@ -4699,7 +4708,8 @@ class PDFViewer(QWidget):
            
             if self.pdf_document:
                 self.pdf_document.close()
-                
+                self.pdf_document = None   # ← always None before fitz.open() so a failed open leaves a clean state
+
             # ✅ NEW: Clear navigation history when loading new PDF
             self.navigation_history.clear()
             self.history_index = -1
@@ -4759,6 +4769,13 @@ class PDFViewer(QWidget):
             print(f"❌ Error loading PDF: {e}")
             import traceback
             traceback.print_exc()
+            # Make sure we don't hold a half-open or closed fitz document
+            try:
+                if self.pdf_document is not None:
+                    self.pdf_document.close()
+            except Exception:
+                pass
+            self.pdf_document = None
             self.show_error(f"Error loading PDF: {str(e)}")
             return False
             
@@ -5821,22 +5838,22 @@ class PDFViewer(QWidget):
                     # Fallback to regular open
                     os.startfile(self.current_pdf_path)
                     from PyQt5.QtWidgets import QMessageBox
-                    QMessageBox.information(self, "Print", 
+                    QMessageBox.information(self.window(), "Print", 
                         "PDF opened in default viewer. Use Ctrl+P to print from there.")
             elif os.name == 'posix':  # macOS and Linux
                 if os.uname().sysname == 'Darwin':  # macOS
                     subprocess.run(['open', self.current_pdf_path])
                     from PyQt5.QtWidgets import QMessageBox
-                    QMessageBox.information(self, "Print", 
+                    QMessageBox.information(self.window(), "Print", 
                         "PDF opened in default viewer. Use Cmd+P to print from there.")
                 else:  # Linux
                     subprocess.run(['xdg-open', self.current_pdf_path])
                     from PyQt5.QtWidgets import QMessageBox
-                    QMessageBox.information(self, "Print", 
+                    QMessageBox.information(self.window(), "Print", 
                         "PDF opened in default viewer. Use Ctrl+P to print from there.")
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Print Error",  f"Could not open PDF for printing: {e}")
+            QMessageBox.warning(self.window(), "Print Error",  f"Could not open PDF for printing: {e}")
     def open_in_external_viewer(self):
         """Open the current PDF file in the system's default PDF viewer"""
         if not self.current_pdf_path or not os.path.exists(self.current_pdf_path):
