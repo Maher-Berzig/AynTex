@@ -6,7 +6,8 @@ import sys
 import os
 from PyQt5.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget, QLabel, QSplitter, QTextEdit, 
-    QMenu, QAction, QFileDialog, QApplication, QSizePolicy, QMessageBox
+    QMenu, QAction, QFileDialog, QApplication, QSizePolicy, QMessageBox,
+    QSpinBox
 )
 from PyQt5.QtCore import Qt, QTimer, QObject, QEvent
 from PyQt5.QtGui import QFont
@@ -281,8 +282,17 @@ class PDFManager:
         if not widget:
             return
 
-        # ✅ FIX: Set focus BEFORE highlighting so hasFocus() returns True
-        widget.setFocus(Qt.TabFocusReason)
+        # Only take focus if the user is not currently typing in a spinbox.
+        # Stealing focus mid-interaction prevents the spinbox from receiving
+        # key events and makes the widget appear unresponsive.
+        current_focus = QApplication.focusWidget()
+        spinbox_has_focus = (
+            current_focus is not None
+            and isinstance(current_focus, QSpinBox)
+            and current_focus.window() is self.main_window
+        )
+        if not spinbox_has_focus:
+            widget.setFocus(Qt.TabFocusReason)
 
         # Find the viewer for this widget
         for pdf_path, data in self.pdf_files.items():
@@ -994,74 +1004,145 @@ class PDFManager:
         
 
     
-    def open_recent_pdf_file(self, file_path):
-        """Open a PDF from the recent files list with guaranteed focus"""
-        if not os.path.exists(file_path):
-            print(f"❌ Recent PDF file not found: {file_path}")
-            if hasattr(self.main_window, 'config_manager'):
-                self.main_window.config_manager.remove_recent_pdf_file(file_path)
-                if hasattr(self.main_window, 'menu_manager'):
-                    self.main_window.menu_manager.update_recent_pdf_files_menu()
-            return None
+    # def open_recent_pdf_file(self, file_path):
+        # """Open a PDF from the recent files list with guaranteed focus"""
+        # if not os.path.exists(file_path):
+            # print(f"❌ Recent PDF file not found: {file_path}")
+            # if hasattr(self.main_window, 'config_manager'):
+                # self.main_window.config_manager.remove_recent_pdf_file(file_path)
+                # if hasattr(self.main_window, 'menu_manager'):
+                    # self.main_window.menu_manager.update_recent_pdf_files_menu()
+            # return None
 
-        file_path = os.path.abspath(file_path)
-        #print(f"🔄 Opening recent PDF: {os.path.basename(file_path)}")
+        # file_path = os.path.abspath(file_path)
+        # #print(f"🔄 Opening recent PDF: {os.path.basename(file_path)}")
         
-        # Debug current state
-        #print(f"📄 Current PDF files tracked: {len(self.pdf_files)}")
-        if file_path in self.pdf_files:
-            print(f"📄 PDF already exists in tracking")
+        # # Debug current state
+        # #print(f"📄 Current PDF files tracked: {len(self.pdf_files)}")
+        # if file_path in self.pdf_files:
+            # print(f"📄 PDF already exists in tracking")
         
-        # Ensure pdf_files is initialized
-        if not hasattr(self, 'pdf_files'):
-            self.pdf_files = {}
+        # # Ensure pdf_files is initialized
+        # if not hasattr(self, 'pdf_files'):
+            # self.pdf_files = {}
         
-        # If PDF is already open, bring it to foreground
-        if file_path in self.pdf_files:
-            #print(f"📄 PDF already open, bringing to foreground...")
-            data = self.pdf_files[file_path]
-            viewer = data.get('viewer')
+        # # If PDF is already open, bring it to foreground
+        # if file_path in self.pdf_files:
+            # #print(f"📄 PDF already open, bringing to foreground...")
+            # data = self.pdf_files[file_path]
+            # viewer = data.get('viewer')
             
-            if viewer and hasattr(viewer, 'isVisible'):
-                #print(f"📄 Found existing viewer, bringing to front...")
-                self._bring_pdf_to_foreground(viewer, data)
+            # if viewer and hasattr(viewer, 'isVisible'):
+                # #print(f"📄 Found existing viewer, bringing to front...")
+                # self._bring_pdf_to_foreground(viewer, data)
                 
-                # Update recent files (move to top)
+                # # Update recent files (move to top)
+                # if hasattr(self.main_window, 'config_manager'):
+                    # self.main_window.config_manager.add_recent_pdf_file(file_path)
+                # if hasattr(self.main_window, 'menu_manager'):
+                    # self.main_window.menu_manager.update_recent_pdf_files_menu()
+                
+                # self.main_window.update_status_bar(f"Recent PDF focused: {os.path.basename(file_path)}")
+                # return viewer
+            # else:
+                # #print(f"⚠️ Stale viewer found, removing and reloading...")
+                # del self.pdf_files[file_path]
+        
+        # # Load PDF (new or reload)
+        # #print(f"📄 Loading PDF in viewer...")
+        # viewer = self.load_pdf_in_viewer(file_path, bring_to_front=True)
+        
+        # if viewer:
+            # # Ensure it's properly focused
+            # #print(f"📄 Ensuring focus after load...")
+            # if file_path in self.pdf_files:
+                # data = self.pdf_files[file_path]
+                # self._bring_pdf_to_foreground(viewer, data)
+            
+            # # Update recent files and menu
+            # if hasattr(self.main_window, 'config_manager'):
+                # self.main_window.config_manager.add_recent_pdf_file(file_path)
+            # if hasattr(self.main_window, 'menu_manager'):
+                # self.main_window.menu_manager.update_recent_pdf_files_menu()
+            
+            # self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
+            
+        # else:
+            # print(f"❌ Failed to load PDF viewer")
+        
+        # return viewer
+
+    def open_recent_pdf_file(self, file_path):
+        """Open a PDF from the recent files list with guaranteed focus and wait cursor"""
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import Qt
+
+        # Show wait cursor immediately
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+
+        try:
+            if not os.path.exists(file_path):
+                print(f"❌ Recent PDF file not found: {file_path}")
+                if hasattr(self.main_window, 'config_manager'):
+                    self.main_window.config_manager.remove_recent_pdf_file(file_path)
+                    if hasattr(self.main_window, 'menu_manager'):
+                        self.main_window.menu_manager.update_recent_pdf_files_menu()
+                return None
+
+            file_path = os.path.abspath(file_path)
+            
+            # Debug current state
+            if file_path in self.pdf_files:
+                print(f"📄 PDF already exists in tracking")
+            
+            # Ensure pdf_files is initialized
+            if not hasattr(self, 'pdf_files'):
+                self.pdf_files = {}
+            
+            # If PDF is already open, bring it to foreground
+            if file_path in self.pdf_files:
+                data = self.pdf_files[file_path]
+                viewer = data.get('viewer')
+                
+                if viewer and hasattr(viewer, 'isVisible'):
+                    self._bring_pdf_to_foreground(viewer, data)
+                    
+                    # Update recent files (move to top)
+                    if hasattr(self.main_window, 'config_manager'):
+                        self.main_window.config_manager.add_recent_pdf_file(file_path)
+                    if hasattr(self.main_window, 'menu_manager'):
+                        self.main_window.menu_manager.update_recent_pdf_files_menu()
+                    
+                    self.main_window.update_status_bar(f"Recent PDF focused: {os.path.basename(file_path)}")
+                    return viewer
+                else:
+                    print(f"⚠️ Stale viewer found, removing and reloading...")
+                    del self.pdf_files[file_path]
+            
+            # Load PDF (new or reload)
+            viewer = self.load_pdf_in_viewer(file_path, bring_to_front=True)
+            
+            if viewer:
+                # Ensure it's properly focused
+                if file_path in self.pdf_files:
+                    data = self.pdf_files[file_path]
+                    self._bring_pdf_to_foreground(viewer, data)
+                
+                # Update recent files and menu
                 if hasattr(self.main_window, 'config_manager'):
                     self.main_window.config_manager.add_recent_pdf_file(file_path)
                 if hasattr(self.main_window, 'menu_manager'):
                     self.main_window.menu_manager.update_recent_pdf_files_menu()
                 
-                self.main_window.update_status_bar(f"Recent PDF focused: {os.path.basename(file_path)}")
-                return viewer
+                self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
             else:
-                #print(f"⚠️ Stale viewer found, removing and reloading...")
-                del self.pdf_files[file_path]
-        
-        # Load PDF (new or reload)
-        #print(f"📄 Loading PDF in viewer...")
-        viewer = self.load_pdf_in_viewer(file_path, bring_to_front=True)
-        
-        if viewer:
-            # Ensure it's properly focused
-            #print(f"📄 Ensuring focus after load...")
-            if file_path in self.pdf_files:
-                data = self.pdf_files[file_path]
-                self._bring_pdf_to_foreground(viewer, data)
+                print(f"❌ Failed to load PDF viewer")
             
-            # Update recent files and menu
-            if hasattr(self.main_window, 'config_manager'):
-                self.main_window.config_manager.add_recent_pdf_file(file_path)
-            if hasattr(self.main_window, 'menu_manager'):
-                self.main_window.menu_manager.update_recent_pdf_files_menu()
-            
-            self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
-            
-        else:
-            print(f"❌ Failed to load PDF viewer")
-        
-        return viewer
-    
+            return viewer
+        finally:
+            # Always restore the cursor, even if an error occurs
+            QApplication.restoreOverrideCursor()    
 
        
 
@@ -1140,38 +1221,44 @@ class PDFManager:
         
         # ✅ FIXED: If this specific PDF has a viewer, just refresh its content
         if pdf_path in self.pdf_files:
-            #print(f"\n🔄 reload_pdf() called for: {os.path.basename(pdf_path)}")
             data = self.pdf_files[pdf_path]
             viewer = data.get('viewer')
-            
+
             if viewer:
-                #print(f"📄 Calling viewer.load_pdf()...")
                 try:
-                    # ✅ Reload content in the same viewer (don't close/reopen)
-                    reload_success = viewer.load_pdf(pdf_path)
-                    #print(f"📊 Reload result: {reload_success}")
-                    
+                    # Use position-preserving reload so the user's scroll
+                    # position survives recompilation and manual refresh.
+                    if hasattr(viewer, 'reload_pdf_preserving_position'):
+                        reload_success = viewer.reload_pdf_preserving_position(pdf_path)
+                    else:
+                        reload_success = viewer.load_pdf(pdf_path)
+
                     if reload_success:
-                        # ✅ Bring THIS specific PDF to foreground
+                        # Bring THIS specific PDF to foreground
                         if self.pdf_layout_mode == "tabbed" and self.pdf_tabs:
                             index = data.get('index', -1)
+                            if index == -1:
+                                index = self.pdf_tabs.indexOf(viewer)
+                                if index != -1:
+                                    data['index'] = index
                             if 0 <= index < self.pdf_tabs.count():
                                 self.pdf_tabs.setCurrentIndex(index)
                                 viewer.setFocus()
-                        
+
                         self.main_window.update_status_bar(f"Reloaded: {os.path.basename(pdf_path)}")
                         return
                     else:
                         print(f"❌ Reload returned False")
-                        print(f"Failed to reload PDF content for {pdf_path}")
-                        
+
                 except Exception as e:
                     print(f"Error reloading PDF {pdf_path}: {e}")
         #else:
             #print(f"⚠️ No existing viewer found, creating new one...")
              
         # ✅ Fallback: If no existing viewer or reload failed, create new one
-        self.load_pdf_in_viewer(pdf_path)
+        # Only attempt if the file actually exists to avoid crashing on a failed compilation.
+        if os.path.exists(pdf_path):
+            self.load_pdf_in_viewer(pdf_path)
 
 
     def _prompt_save_annotations(self, viewer):
@@ -1823,23 +1910,6 @@ class PDFManager:
         # Now create fresh welcome content
         # ============================================
         
-        # welcome_content = lm._create_pdf_welcome_content()
-        
-        # # Create new tab widget
-        # welcome_tab = QTabWidget()
-        # welcome_tab.setObjectName("pdf_welcome_tab")
-        # welcome_tab.addTab(welcome_content, "PDF Viewer")
-        # welcome_tab.setTabsClosable(False)
-        
-        # # Style it to match
-        # welcome_tab.setStyleSheet("""
-            # QTabWidget::pane {
-                # border: none;
-                # background-color: white;
-            # }
-        # """)
-
-        # AFTER:
         from style_manager import get_welcome_style
         w = get_welcome_style()
 
@@ -1917,160 +1987,7 @@ class PDFManager:
         self.pdf_tabs.tabBarClicked.connect(self._on_pdf_tab_bar_clicked)
 
         
-        
-        #print("✅ Welcome tab shown with clean slate")
-    
-
-    # def _show_pdf_welcome_tab(self):
-        # """Show welcome tab when no PDFs are open - SAFE: preserves tool tabs."""
-        
-        # TOOL_TABS = {
-            # "AI Assistant", "Tools", "Accessories", "Insert Character", "Latex Wizard", 
-            # "TikZ Plotter", "File Comparison", "PDF Comparison", "Todo list", "Spreadsheet"
-        # }
-
-        # # If pdf_tabs already exists and has tool tabs, just add welcome alongside them
-        # if self.pdf_tabs and isinstance(self.pdf_tabs, QTabWidget):
-            # # Check if welcome already exists
-            # for i in range(self.pdf_tabs.count()):
-                # if self.pdf_tabs.tabText(i) in ["Welcome", "PDF Viewer"]:
-                    # return  # Already showing welcome, nothing to do
-
-            # # Check if only tool tabs remain — if so, don't add welcome
-            # has_non_tool = False
-            # for i in range(self.pdf_tabs.count()):
-                # if self.pdf_tabs.tabText(i) not in TOOL_TABS:
-                    # has_non_tool = True
-                    # break
-
-            # if not has_non_tool and self.pdf_tabs.count() > 0:
-                # # Only tool tabs remain — don't add welcome, leave them alone
-                # return
-
-            # # Add welcome tab to existing tab widget
-            # from style_manager import get_welcome_style
-            # w = get_welcome_style()
-            # lm = self.main_window.layout_manager
-            # welcome_content = lm._create_pdf_welcome_content()
-            # welcome_content.setObjectName("pdf_welcome_widget")
-            # self.pdf_tabs.insertTab(0, welcome_content, "PDF Viewer")
-            # self.pdf_tabs.setCurrentIndex(0)
-            # # Reconnect signals
-            # try:
-                # self.pdf_tabs.currentChanged.disconnect(self.on_pdf_tab_changed)
-            # except (TypeError, RuntimeError):
-                # pass
-            # self.pdf_tabs.currentChanged.connect(self.on_pdf_tab_changed)
-            # try:
-                # self.pdf_tabs.tabBarClicked.disconnect(self._on_pdf_tab_bar_clicked)
-            # except (TypeError, RuntimeError):
-                # pass
-            # self.pdf_tabs.tabBarClicked.connect(self._on_pdf_tab_bar_clicked)
-            # return
-
-        # # No pdf_tabs at all — create from scratch (original logic, but safe)
-        # if not hasattr(self.main_window, 'layout_manager'):
-            # return
-        # lm = self.main_window.layout_manager
-        # if not hasattr(lm, 'pdf_container') or lm.pdf_container is None:
-            # return
-
-        # pdf_container = lm.pdf_container
-        # pdf_layout = pdf_container.layout()
-        # if not pdf_layout:
-            # return
-
-        # # Only clear widgets that are NOT tool tabs
-        # widgets_to_remove = []
-        # for i in range(pdf_layout.count()):
-            # item = pdf_layout.itemAt(i)
-            # if item and item.widget():
-                # w_widget = item.widget()
-                # # Check if it contains tool tabs
-                # is_tool_container = False
-                # if isinstance(w_widget, QTabWidget):
-                    # for j in range(w_widget.count()):
-                        # if w_widget.tabText(j) in TOOL_TABS:
-                            # is_tool_container = True
-                            # # Reuse this tab widget — just add welcome to it
-                            # self.pdf_tabs = w_widget
-                            # from style_manager import get_welcome_style
-                            # welcome_content = lm._create_pdf_welcome_content()
-                            # welcome_content.setObjectName("pdf_welcome_widget")
-                            # w_widget.insertTab(0, welcome_content, "PDF Viewer")
-                            # w_widget.setCurrentIndex(0)
-                            # return
-                # if not is_tool_container:
-                    # widgets_to_remove.append(w_widget)
-
-        # for w_widget in widgets_to_remove:
-            # w_widget.hide()
-            # w_widget.setParent(None)
-            # w_widget.deleteLater()
-
-        # self.pdf_tabs = None
-        # QApplication.processEvents()
-
-        # from style_manager import get_welcome_style
-        # w = get_welcome_style()
-        # welcome_content = lm._create_pdf_welcome_content()
-        # welcome_content.setObjectName("pdf_welcome_widget")
-
-        # welcome_tab = QTabWidget()
-        # welcome_tab.setObjectName("pdf_welcome_tab")
-        # welcome_tab.addTab(welcome_content, "PDF Viewer")
-        # welcome_tab.setTabsClosable(False)
-        # welcome_tab.setStyleSheet(f"""
-            # QTabWidget::pane {{
-                # border: none;
-                # background-color: {w['tab_pane_bg']};
-            # }}
-        # """)
-        # welcome_tab.tabCloseRequested.connect(self._handle_tab_close_request)
-
-        # # Enable drag-and-drop
-        # welcome_tab.setAcceptDrops(True)
-        # pdf_manager = self
-
-        # def tab_pdf_drag_enter(event):
-            # if event.mimeData().hasUrls():
-                # for url in event.mimeData().urls():
-                    # if url.isLocalFile() and url.toLocalFile().lower().endswith('.pdf'):
-                        # event.acceptProposedAction()
-                        # return
-            # QTabWidget.dragEnterEvent(welcome_tab, event)
-
-        # def tab_pdf_drag_move(event):
-            # if event.mimeData().hasUrls():
-                # for url in event.mimeData().urls():
-                    # if url.isLocalFile() and url.toLocalFile().lower().endswith('.pdf'):
-                        # event.acceptProposedAction()
-                        # return
-            # QTabWidget.dragMoveEvent(welcome_tab, event)
-
-        # def tab_pdf_drop(event):
-            # if event.mimeData().hasUrls():
-                # for url in event.mimeData().urls():
-                    # file_path = url.toLocalFile()
-                    # if file_path and os.path.isfile(file_path) and file_path.lower().endswith('.pdf'):
-                        # pdf_manager.load_pdf_in_viewer(file_path, bring_to_front=True)
-                        # if hasattr(pdf_manager.main_window, 'config_manager'):
-                            # pdf_manager.main_window.config_manager.add_recent_pdf_file(file_path)
-                # event.acceptProposedAction()
-                # return
-            # QTabWidget.dropEvent(welcome_tab, event)
-
-        # welcome_tab.dragEnterEvent = tab_pdf_drag_enter
-        # welcome_tab.dragMoveEvent = tab_pdf_drag_move
-        # welcome_tab.dropEvent = tab_pdf_drop
-
-        # pdf_layout.addWidget(welcome_tab, 1)
-        # welcome_tab.show()
-        # self.pdf_tabs = welcome_tab
-        # self.pdf_tabs.currentChanged.connect(self.on_pdf_tab_changed)
-        # self.pdf_tabs.tabBarClicked.connect(self._on_pdf_tab_bar_clicked)
-
-        
+               
     def _handle_tab_close_request(self, index):
         """Unified handler for closing tabs - works for both PDFs and tools."""
         if not self.pdf_tabs:
