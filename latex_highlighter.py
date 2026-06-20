@@ -717,11 +717,16 @@ class LaTeXHighlighter(QSyntaxHighlighter):
 
     def _rehighlight_block_incremental(self, block, chunk=50, delay=0):
         """Process chunk blocks then yield to event loop."""
-        processed = 0
-        while block.isValid() and processed < chunk:
-            self.rehighlightBlock(block)
-            block = block.next()
-            processed += 1
-        if block.isValid():
-            QTimer.singleShot(delay, lambda b=block: 
-                self._rehighlight_block_incremental(b, chunk, delay))
+        try:
+            processed = 0
+            while block.isValid() and processed < chunk:
+                self.rehighlightBlock(block)
+                block = block.next()
+                processed += 1
+            if block.isValid():
+                QTimer.singleShot(delay, lambda b=block:
+                    self._rehighlight_block_incremental(b, chunk, delay))
+        except RuntimeError:
+            # The highlighter's C++ object was deleted (editor/document closed)
+            # while a pending timer chunk was still in the event queue -- ignore.
+            pass
