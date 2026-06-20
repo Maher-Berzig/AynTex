@@ -23,6 +23,8 @@ class LayoutManager:
         self.pdf_container = None
         self.output_container = None
         self.terminal_widget = None
+        self._recreating = False   # new flag
+
         
         self.editor_vertical_splitter = None  # Store reference to prevent
         self._toggle_lock = False  # Prevent rapid clicks
@@ -1143,7 +1145,11 @@ class LayoutManager:
             
             # Store reference
             self.main_window.pdf_manager.pdf_tabs = welcome_tab
-            
+
+            # Install tab context menu on this (possibly first) PDF tab bar
+            if hasattr(self.main_window, 'tab_context_menu'):
+                self.main_window.tab_context_menu.reinstall()
+
             pdf_widget = welcome_tab
         else:
             if pdf_widget.parent() != self.pdf_container:
@@ -1532,6 +1538,11 @@ class LayoutManager:
         if hasattr(self.main_window, 'config_manager'):
             self.main_window.config_manager.set_config_value('layout', 'pdf_layout_mode', new_mode)
         
+        # ✅ Detach tab context menu filters BEFORE destroying old widgets,
+        # so removeEventFilter() runs while the tab bars are still alive.
+        if hasattr(self.main_window, 'tab_context_menu'):
+            self.main_window.tab_context_menu.detach_pdf()
+
         # ✅ FIX: Hide the entire pdf_container during transition to prevent flash
         self.pdf_container.setUpdatesEnabled(False)
         
@@ -1540,19 +1551,19 @@ class LayoutManager:
             if pdf_layout is None:
                 return
             
-            # ✅ FIX: Hide widgets BEFORE removing them from parent
+            # Remove and schedule deletion of old PDF widgets.
+            # Use pdf_manager._detach_and_destroy_widget so that any
+            # _TabBarFilter event filters are removed before the C++ objects
+            # are destroyed — preventing silent segfaults.
             while pdf_layout.count():
                 item = pdf_layout.takeAt(0)
-                if item.widget():
-                    widget = item.widget()
-                    widget.hide()  # ✅ Hide first to prevent flash
-                    widget.setParent(None)
-            
+                w = item.widget() if item else None
+                if w:
+                    self.main_window.pdf_manager._detach_and_destroy_widget(w)
+
             # Clear PDF manager widget references
             self.main_window.pdf_manager.pdf_tabs = None
             self.main_window.pdf_manager.pdf_splitter = None
-            
-            # ✅ FIX: Removed QApplication.processEvents() - not needed and causes flash
             
             # Recreate
             self._recreate_pdf_container()
@@ -1561,6 +1572,10 @@ class LayoutManager:
             # ✅ FIX: Re-enable updates after transition is complete
             self.pdf_container.setUpdatesEnabled(True)
             self.pdf_container.update()
+
+        # Reinstall filters on the new tab bars
+        if hasattr(self.main_window, 'tab_context_menu'):
+            self.main_window.tab_context_menu.reinstall_pdf()
         
         # Update status
         status_key = f"status_pdf_{new_mode}"
@@ -1637,13 +1652,17 @@ class LayoutManager:
             
             container.addWidget(tab_widget)
             self.main_window.editor_manager.editor_tabs = [tab_widget]
-        
-        
+
+            if hasattr(self.main_window, 'tab_context_menu'):
+                self.main_window.tab_context_menu.reinstall_editor()
 
     def _recreate_editor_container(self):
         """Recreate editor container with new layout mode - FIXED path/basename issues"""
+        if self._recreating:
+            return
+        self._recreating = True
+        
         try:
-
             # Preserve output container FIRST - this is critical
             preserved_output = self.output_container
             if preserved_output is None:
@@ -1692,6 +1711,7 @@ class LayoutManager:
                 old_editor_widget = self.editor_vertical_splitter.widget(0)
                 if old_editor_widget != preserved_output:
                     old_editor_widget.setParent(None)
+                    old_editor_widget.deleteLater()  # <-- Add this line
 
             # Create new editor widget based on layout mode
             new_editor_widget = None
@@ -1748,6 +1768,11 @@ class LayoutManager:
                     else:
                         # No tab_order or it's invalid, use editor_files order
                         ordered_files = list(current_editors.keys())
+                        
+                    # Add any missing (should not happen, but safe)
+                    for path in current_editors.keys():
+                        if path not in ordered_files:
+                            ordered_files.append(path)                        
 
                     #print(f"Processing files in order: {[os.path.basename(f) for f in ordered_files]}")
 
@@ -1897,15 +1922,18 @@ class LayoutManager:
             # Update UI
             if hasattr(self.main_window, 'update_title'):
                 self.main_window.update_title()
-                
-            #print(f"✅ Editor container recreation complete with {len(current_editors)} editors restored")
+
+            # Reinstall tab context menus on the new editor tab bar(s) only
+            if hasattr(self.main_window, 'tab_context_menu'):
+                self.main_window.tab_context_menu.reinstall_editor()
 
         except Exception as e:
             print(f"❌ Error in _recreate_editor_container: {e}")
             import traceback
             traceback.print_exc()
             
-
+        finally:
+            self._recreating = False
  
 
     def _recreate_pdf_container(self):
@@ -1928,12 +1956,14 @@ class LayoutManager:
                                 'viewer': viewer,
                                 'data': data  # Keep original data structure
                             }
-            # Get current layout and clear old widget
+            # Get current layout and clear old widget safely
             pdf_layout = self.pdf_container.layout()
             if pdf_layout.count() > 0:
                 old_pdf_widget = pdf_layout.itemAt(0).widget()
                 if old_pdf_widget:
-                    old_pdf_widget.setParent(None)
+                    # Detach filters and schedule deletion — bare setParent(None)
+                    # leaves dangling _TabBarFilter C++ references that crash later.
+                    self.main_window.pdf_manager._detach_and_destroy_widget(old_pdf_widget)
             # Clear old manager widget references but NOT the file data
             old_tabs = getattr(self.main_window.pdf_manager, 'pdf_tabs', None)
             old_splitter = getattr(self.main_window.pdf_manager, 'pdf_splitter', None)
@@ -2049,6 +2079,7 @@ class LayoutManager:
             new_pdf_widget.show()
             new_pdf_widget.update()
             self.pdf_container.update()
+
             #print(f"PDF container recreation complete with {len(current_pdfs)} PDFs restored")
         except Exception as e:
             print(f"Error in _recreate_pdf_container: {e}")
