@@ -1,4 +1,4 @@
-#main_window.py
+# main_window.py
 """
 Main Window Class - Core window setup 
 """
@@ -42,7 +42,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.initializing = True
         self.is_rtl = False
+        self.is_pdf_toolbar_visible = True
         self._session_loaded = False 
+        
 
         # DO NOT instantiate SpellChecker here — defer until the window
         # is fully constructed so all UI components it may reference exist.
@@ -75,6 +77,11 @@ class MainWindow(QMainWindow):
         # ✅ ADD THIS: Create the completer manager
         from latex_completer_manager import LaTeXCompleterManager
         self.latex_completer_manager = LaTeXCompleterManager(self)
+        
+
+        from context_menu import TabContextMenu
+        self.tab_context_menu = TabContextMenu(self)
+        self.tab_context_menu.install()        
         
         # Install on existing editors
         self._install_completers_on_existing_editors()
@@ -282,6 +289,7 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QShortcut
         from PyQt5.QtGui import QKeySequence
         
+       
         # for action in self.findChildren(QAction):
             # if action.shortcut().toString():
                 # print(action.text(), action.shortcut().toString())
@@ -289,6 +297,13 @@ class MainWindow(QMainWindow):
 
         try:
             if hasattr(self, 'editor_manager') and self.editor_manager:
+                
+                # Zoom the editor
+                zoom_in_shortcut = QShortcut(QKeySequence("Ctrl++"), self)
+                zoom_in_shortcut.activated.connect(self.zoom_in)   # ✅ fixed
+
+                zoom_out_shortcut = QShortcut(QKeySequence("Ctrl+-"), self)
+                zoom_out_shortcut.activated.connect(self.zoom_out) # ✅ fixed
                 
                 # Go to line
                 go_to_line_shortcut = QShortcut(QKeySequence("Ctrl+G"), self)
@@ -355,7 +370,6 @@ class MainWindow(QMainWindow):
     
         except Exception as e:
             print(f"Warning: Could not create shortcuts: {e}")
-
 
 
     def _activate_side_panel_button(self, one_based_index):
@@ -740,8 +754,38 @@ class MainWindow(QMainWindow):
             except:
                 pass
                 
-        self._apply_initial_visibility_settings()                
+        self._apply_initial_visibility_settings()     
 
+    # Add these methods to your MainWindow class
+
+    def zoom_in(self):
+        """Increase font size of the current editor."""
+        editor = self._get_current_editor()
+        if editor is None:
+            return
+        font = editor.font()
+        size = font.pointSize()
+        if size < 72:   # upper bound
+            font.setPointSize(size + 1)
+            editor.setFont(font)
+
+    def zoom_out(self):
+        """Decrease font size of the current editor."""
+        editor = self._get_current_editor()
+        if editor is None:
+            return
+        font = editor.font()
+        size = font.pointSize()
+        if size > 6:    # lower bound
+            font.setPointSize(size - 1)
+            editor.setFont(font)
+
+    def _get_current_editor(self):
+        """Helper to get the currently active editor widget."""
+        if hasattr(self, 'editor_manager') and self.editor_manager:
+            return self.editor_manager.get_current_editor()
+        return None
+        
     def _restore_pdf_zoom_factor(self):
         """Restore PDF zoom factor from config"""
         try:
@@ -2744,7 +2788,7 @@ class MainWindow(QMainWindow):
         return None
                         
 
-    def toggle_pdf_toolbars(self):
+    def toggle_pdf_toolbars(self, checked: bool):
         """Toggle PDF toolbars visibility for all open PDFs"""
         if not hasattr(self, 'pdf_manager'):
             return
@@ -2763,17 +2807,28 @@ class MainWindow(QMainWindow):
         if first_viewer and first_data:
             self.pdf_manager._bring_pdf_to_foreground(first_viewer, first_data)
         
+        
+        self.pdf_manager.set_toolbar_visible_state(checked)
+        self.is_pdf_toolbar_visible = checked
         # Now toggle all PDF toolbars (this affects all open PDFs)
         self.pdf_manager.toggle_all_pdf_toolbars()
+
+
+        # ✅ Update the main menu action (if it exists) – block signals to avoid recursion
+        if hasattr(self, 'menu_pdf_toolbar_toggle_action'):
+            action = self.menu_pdf_toolbar_toggle_action
+            action.blockSignals(True)
+            action.setChecked(checked)
+            action.blockSignals(False)
         
-        # Update the state for future PDFs
-        if first_viewer:
-            new_state = first_viewer.is_toolbar_visible()
-            self.pdf_manager.set_toolbar_visible_state(new_state)
+        # # Update the state for future PDFs
+        # if first_viewer:
+            # new_state = first_viewer.is_toolbar_visible()
+            # self.pdf_manager.set_toolbar_visible_state(new_state)
             
-            # Update menu checkmark
-            if hasattr(self, 'menu_pdf_toolbar_toggle_action'):
-                self.menu_pdf_toolbar_toggle_action.setChecked(new_state)
+            # # Update menu checkmark
+            # if hasattr(self, 'menu_pdf_toolbar_toggle_action'):
+                # self.menu_pdf_toolbar_toggle_action.setChecked(new_state)
 
     def _bring_djvu_to_foreground(self):
         """Bring the DjVu tab to the foreground if it exists."""
