@@ -553,11 +553,35 @@ class CompilationManager(QObject):
     def compile_latex(self, engine=None):
         """Enhanced compile_latex method with proper UI integration"""
         lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]                            
-        
-        current_editor = self.main_window.editor_manager.get_current_editor()
-        current_file = self.main_window.editor_manager.get_current_file_path()
-        
+        tr = self.main_window.translations[lang]
+
+        em = self.main_window.editor_manager
+
+        # ── Resolve compile target ────────────────────────────────────────
+        # If a master document is set, compile that file regardless of which
+        # tab is active.  The master must be open in the editor so unsaved
+        # changes are handled correctly via save_file().
+        master_file = em.get_master_document() if hasattr(em, 'get_master_document') else None
+
+        if master_file:
+            # Make sure the master file is actually open in the editor
+            if master_file not in em.editor_files:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self.main_window.window(),
+                    tr.get("master_document_not_open", "Master Document Not Open"),
+                    tr.get("master_document_not_open_msg",
+                           "The master document is not open in the editor:\n{file}\n\n"
+                           "Please open it first, or clear the master document setting."
+                           ).format(file=master_file)
+                )
+                return
+            current_file   = master_file
+            current_editor = em.editor_files[master_file].get('editor')
+        else:
+            current_editor = em.get_current_editor()
+            current_file   = em.get_current_file_path()
+
         if not current_editor or not current_file:
             self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
             return
@@ -617,10 +641,13 @@ class CompilationManager(QObject):
             if _cur_editor and _saved_cursor:
                 _cur_editor.setTextCursor(_saved_cursor)
                 _cur_editor.verticalScrollBar().setValue(_saved_scroll)
-            
-            current_file = self.main_window.editor_manager.current_file
-            if current_file and current_file in self.main_window.editor_manager.editor_files:
-                if self.main_window.editor_manager.editor_files[current_file].get('modified', False):
+
+            # Re-resolve compile target: master document takes priority over
+            # whatever tab became active during processEvents().
+            _master = em.get_master_document() if hasattr(em, 'get_master_document') else None
+            current_file = _master if _master else em.current_file
+            if current_file and current_file in em.editor_files:
+                if em.editor_files[current_file].get('modified', False):
                     if not self.main_window.editor_manager.save_file():
                         # Release lock and reset UI on save failure
                         self._compilation_in_progress = False
