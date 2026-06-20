@@ -61,9 +61,6 @@ class ContextMenuManager:
                 pass
 
         menu = QMenu(editor)
-        # ✅ Apply theme stylesheet
-        menu.setStyleSheet(self._get_menu_stylesheet())
-
 
         # SECTION 0: Title
         title_action = QAction("Context Menu", menu)
@@ -212,71 +209,6 @@ class ContextMenuManager:
         # Delegate to the AI widget
         ai_widget.handle_context_menu_action(action_name, selected_text, editor)
 
-    def _get_menu_stylesheet(self):
-        """Return a theme-aware stylesheet for context menus."""
-        from style_manager import get_welcome_style, _current_theme
-        
-        # Use per-theme colors directly
-        _MENU_STYLES = {
-            "default": {
-                "bg": "#ffffff",         "color": "#2d2d30",
-                "border": "#aaaaaa",     "selected_bg": "#e6f3ff",
-                "selected_color": "#1e1e1e", "disabled_color": "#aaaaaa",
-                "separator": "#dddddd",
-            },
-            "dark": {
-                "bg": "#3c3f41",         "color": "#bbbbbb",
-                "border": "#555759",     "selected_bg": "#4b6eaf",
-                "selected_color": "#ffffff", "disabled_color": "#656565",
-                "separator": "#555759",
-            },
-            "light": {
-                "bg": "#fafafa",         "color": "#1a1a1a",
-                "border": "#c0c0c0",     "selected_bg": "#e3f0ff",
-                "selected_color": "#000000", "disabled_color": "#aaaaaa",
-                "separator": "#cccccc",
-            },
-            "midnight": {
-                "bg": "#161b22",         "color": "#c9d1d9",
-                "border": "#30363d",     "selected_bg": "#1f6feb",
-                "selected_color": "#ffffff", "disabled_color": "#484f58",
-                "separator": "#30363d",
-            },
-        }
-
-        s = _MENU_STYLES.get(_current_theme, _MENU_STYLES["default"])
-
-        return f"""
-            QMenu {{
-                background-color: {s['bg']};
-                color: {s['color']};
-                border: 1px solid {s['border']};
-                padding: 4px 0px;
-            }}
-            QMenu::item {{
-                padding: 5px 28px 5px 20px;
-                background-color: transparent;
-            }}
-            QMenu::item:selected {{
-                background-color: {s['selected_bg']};
-                color: {s['selected_color']};
-            }}
-            QMenu::item:disabled {{
-                color: {s['disabled_color']};
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background-color: {s['separator']};
-                margin: 3px 8px;
-            }}
-            QMenu::indicator {{
-                width: 14px;
-                height: 14px;
-            }}
-            QMenu::icon {{
-                padding-left: 14px;
-            }}
-        """
 
     def _get_ai_widget(self):
         """Get the active AI Assistant widget, or None."""
@@ -596,3 +528,972 @@ class ContextMenuManager:
         editor_id = id(editor)
         if editor_id in self._installed_editors:
             self._installed_editors.remove(editor_id)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tab Bar Context Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from PyQt5.QtCore import QObject, QEvent
+from PyQt5.QtWidgets import QTabWidget
+
+
+class _TabBarFilter(QObject):
+    """Event filter installed on a QTabBar.
+
+    Qt does not reliably deliver customContextMenuRequested on tab bars because
+    the parent QTabWidget may swallow the right-click before the tab bar sees it.
+
+    IMPORTANT: we use parent=None intentionally.  If we parented to the tab bar,
+    Qt would destroy the C++ QObject when the tab widget is destroyed during a
+    layout switch — but the Python wrapper would remain in _filters, causing a
+    RuntimeError on the next access.  With parent=None the Python list is the
+    sole owner; _filters.clear() is the only thing that destroys the filter.
+    We remove the event filter explicitly in detach() before the tab bar is
+    destroyed, so there is never a dangling installEventFilter reference.
+    """
+    def __init__(self, tab_bar, slot):
+        super().__init__(None)          # NO Qt parent — Python list owns lifetime
+        self._slot = slot
+        self._tab_bar = tab_bar
+        tab_bar.installEventFilter(self)
+
+    def detach(self):
+        """Remove the event filter before the tab bar is destroyed."""
+        try:
+            if self._tab_bar is not None:
+                self._tab_bar.removeEventFilter(self)
+        except RuntimeError:
+            pass   # C++ object already gone — nothing to do
+        self._tab_bar = None
+
+    def eventFilter(self, obj, event):
+        try:
+            if event.type() == QEvent.ContextMenu:
+                self._slot(obj, event.pos())
+                return True
+        except RuntimeError:
+            pass   # underlying C++ object was destroyed mid-flight
+        return False
+
+
+class TabContextMenu:
+    """
+    Installs a right-click context menu on editor and PDF tab bars.
+
+    Usage (call once after the tab widgets are ready, store the instance):
+        self.tab_context_menu = TabContextMenu(self)
+        self.tab_context_menu.install()
+
+    Call reinstall() after any layout switch that replaces the tab widgets:
+        self.tab_context_menu.reinstall()
+    """
+
+    def __init__(self, main_window):
+        self.main_window = main_window
+        # Keep references so the filters aren't garbage-collected
+        self._filters = []
+        self._pdf_filters = set()   # subset of _filters belonging to PDF tab bars
+
+    # ── public ────────────────────────────────────────────────────────────────
+
+    def install(self):
+        """Install context menus on both editor and PDF tab bars."""
+        self._install_editor_tabs()
+        self._install_pdf_tabs()
+
+    def reinstall(self):
+        """Re-install after a layout switch that replaced ALL tab widgets."""
+        for f in self._filters:
+            f.detach()
+        self._filters.clear()
+        self._pdf_filters.clear()
+        self.install()
+
+    def reinstall_editor(self):
+        """Re-install only the editor tab bar filters.
+
+        Use this instead of reinstall() when only editor_tabs changed (e.g.
+        inside _recreate_editor_container).  Calling the full reinstall() from
+        there is dangerous: _install_pdf_tabs() iterates pdf_files entries whose
+        QTabWidget objects may already have been destroyed by a concurrent PDF
+        layout switch, causing a RuntimeError on tw.tabBar().
+        """
+        # Detach and remove only the non-PDF (editor) filters
+        surviving = []
+        for f in self._filters:
+            if f not in self._pdf_filters:
+                f.detach()
+            else:
+                surviving.append(f)
+        self._filters = surviving
+        # Re-install editor tab bars only
+        self._install_editor_tabs()
+
+    def detach_pdf(self):
+        """Detach only the PDF tab bar filters (call BEFORE destroying old PDF widgets)."""
+        surviving = []
+        for f in self._filters:
+            if f in self._pdf_filters:
+                f.detach()
+            else:
+                surviving.append(f)
+        self._filters = surviving
+        self._pdf_filters.clear()
+
+    def reinstall_pdf(self):
+        """Install fresh PDF tab bar filters after new PDF widgets are created."""
+        self._install_pdf_tabs()
+
+    # ── installation helpers ───────────────────────────────────────────────────
+
+    def _install_editor_tabs(self):
+        em = getattr(self.main_window, 'editor_manager', None)
+        if not em:
+            return
+        tabs = getattr(em, 'editor_tabs', None)
+        if tabs is None:
+            return
+        if isinstance(tabs, QTabWidget):
+            try:
+                self._attach(tabs.tabBar(), self._show_editor_menu)
+            except RuntimeError:
+                pass   # QTabWidget already destroyed
+        elif isinstance(tabs, list):
+            for tw in tabs:
+                if not isinstance(tw, QTabWidget):
+                    continue
+                try:
+                    self._attach(tw.tabBar(), self._show_editor_menu)
+                except RuntimeError:
+                    pass   # stale entry — QTabWidget already destroyed
+
+    def _install_pdf_tabs(self):
+        pm = getattr(self.main_window, 'pdf_manager', None)
+        if not pm:
+            return
+        attached = set()   # avoid double-attaching the same tab bar
+
+        pdf_tabs = getattr(pm, 'pdf_tabs', None)
+
+        # Tabbed mode: pdf_tabs is a single QTabWidget
+        if isinstance(pdf_tabs, QTabWidget):
+            try:
+                tb = pdf_tabs.tabBar()
+                if id(tb) not in attached:
+                    self._attach(tb, self._show_pdf_menu, is_pdf=True)
+                    attached.add(id(tb))
+            except RuntimeError:
+                pass   # QTabWidget already destroyed — skip
+
+        # H/V mode: pdf_tabs is [] — each PDF lives in its own QTabWidget
+        # stored as pdf_files[path]['tab_widget']
+        if hasattr(pm, 'pdf_files'):
+            for path, data in pm.pdf_files.items():
+                if not isinstance(data, dict):
+                    continue
+                tw = data.get('tab_widget')
+                if not isinstance(tw, QTabWidget):
+                    continue
+                try:
+                    tb = tw.tabBar()   # raises RuntimeError if C++ object gone
+                    if id(tb) not in attached:
+                        self._attach(tb, self._show_pdf_menu, is_pdf=True)
+                        attached.add(id(tb))
+                except RuntimeError:
+                    pass   # stale entry — QTabWidget already destroyed
+
+    def _attach(self, tab_bar, slot, is_pdf=False):
+        """Attach an event-filter-based context menu to *tab_bar*."""
+        f = _TabBarFilter(tab_bar, slot)
+        self._filters.append(f)     # keep alive
+        if is_pdf:
+            self._pdf_filters.add(f)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # EDITOR tab context menu
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _show_editor_menu(self, tab_bar, pos):
+        from PyQt5.QtWidgets import QMenu, QAction, QTabWidget
+        tab_index = tab_bar.tabAt(pos)
+        if tab_index < 0:
+            return
+
+        # Resolve the tab widget that owns this bar
+        tab_widget = tab_bar.parent()
+        if not isinstance(tab_widget, QTabWidget):
+            return
+
+        # Find the file path for this tab
+        file_path = self._file_path_for_tab(tab_widget, tab_index)
+        em = self.main_window.editor_manager
+
+        # True when the tab is a welcome/untitled placeholder with no real file
+        is_empty = not bool(file_path)
+
+        menu = QMenu(tab_bar)
+
+        # ── header ────────────────────────────────────────────────────────
+        if file_path:
+            header = QAction(os.path.basename(file_path), menu)
+        else:
+            header = QAction(tab_widget.tabText(tab_index), menu)
+        f = header.font(); f.setBold(True); header.setFont(f)
+        header.setEnabled(False)
+        menu.addAction(header)
+        menu.addSeparator()
+
+        # ── open group ────────────────────────────────────────────────────
+        open_act = QAction("Open\tCtrl+O", menu)
+        open_act.triggered.connect(lambda: self._editor_open())
+        self._icon(open_act, 'open')
+        menu.addAction(open_act)
+        menu.addSeparator()
+
+        # ── save group ────────────────────────────────────────────────────
+        is_modified = False
+        if file_path and file_path in em.editor_files:
+            is_modified = em.editor_files[file_path].get('modified', False)
+
+        save_act = QAction("Save\tCtrl+S", menu)
+        save_act.setEnabled(not is_empty and is_modified)
+        save_act.triggered.connect(lambda: self._editor_save(file_path))
+        self._icon(save_act, 'save')
+        menu.addAction(save_act)
+
+        saveas_act = QAction("Save As…", menu)
+        saveas_act.setEnabled(not is_empty)
+        saveas_act.triggered.connect(lambda: em.save_as_file())
+        self._icon(saveas_act, 'save_as')
+        menu.addAction(saveas_act)
+
+        savecopy_act = QAction("Save a Copy As…", menu)
+        savecopy_act.setEnabled(not is_empty)
+        savecopy_act.triggered.connect(lambda: em.save_copy_as())
+        self._icon(savecopy_act, 'save_copy_as')
+        menu.addAction(savecopy_act)
+
+        menu.addSeparator()
+
+        # ── close group ───────────────────────────────────────────────────
+        close_act = QAction("Close", menu)
+        close_act.triggered.connect(
+            lambda: self._editor_close_tab(tab_widget, tab_index, file_path)
+        )
+        self._icon(close_act, 'close_tex')
+        menu.addAction(close_act)
+
+        close_others_act = QAction("Close Others", menu)
+        close_others_act.setEnabled(not is_empty and tab_widget.count() > 1)
+        close_others_act.triggered.connect(
+            lambda: self._editor_close_others(tab_widget, tab_index)
+        )
+        menu.addAction(close_others_act)
+
+        close_all_act = QAction("Close All Tex Files", menu)
+        close_all_act.setEnabled(not is_empty and tab_widget.count() > 0)
+        close_all_act.triggered.connect(
+            lambda: self._editor_close_all(tab_widget)
+        )
+        self._icon(close_all_act, 'close_all_tex')
+        menu.addAction(close_all_act)
+
+        menu.addSeparator()
+
+        # ── file identity ─────────────────────────────────────────────────
+        path_menu = menu.addMenu("Copy Path")
+        copy_full_act = QAction("Full Path", path_menu)
+        copy_full_act.setEnabled(not is_empty)
+        copy_full_act.triggered.connect(
+            lambda: QApplication.clipboard().setText(file_path or '')
+        )
+        path_menu.addAction(copy_full_act)
+
+        copy_name_act = QAction("File Name Only", path_menu)
+        copy_name_act.setEnabled(not is_empty)
+        copy_name_act.triggered.connect(
+            lambda: QApplication.clipboard().setText(
+                os.path.basename(file_path) if file_path else ''
+            )
+        )
+        path_menu.addAction(copy_name_act)
+
+        copy_dir_act = QAction("Folder Path", path_menu)
+        copy_dir_act.setEnabled(not is_empty)
+        copy_dir_act.triggered.connect(
+            lambda: QApplication.clipboard().setText(
+                os.path.dirname(file_path) if file_path else ''
+            )
+        )
+        path_menu.addAction(copy_dir_act)
+
+        open_folder_act = QAction("Open Containing Folder", menu)
+        open_folder_act.setEnabled(not is_empty and os.path.exists(file_path))
+        open_folder_act.triggered.connect(lambda: self._open_folder(file_path))
+        self._icon(open_folder_act, 'folder')
+        menu.addAction(open_folder_act)
+
+        open_external_act = QAction("Open in External Editor", menu)
+        open_external_act.setEnabled(not is_empty and os.path.exists(file_path))
+        open_external_act.triggered.connect(lambda: self._open_external(file_path))
+        menu.addAction(open_external_act)
+
+        menu.addSeparator()
+
+        # ── rename ────────────────────────────────────────────────────────
+        rename_act = QAction("Rename File…", menu)
+        rename_act.setEnabled(not is_empty and os.path.exists(file_path))
+        rename_act.triggered.connect(lambda: self._rename_file(file_path, tab_widget, tab_index))
+        menu.addAction(rename_act)
+
+        menu.addSeparator()
+
+        # ── print ─────────────────────────────────────────────────────────
+        print_act = QAction("Print…", menu)
+        print_act.setEnabled(not is_empty)
+        print_act.triggered.connect(lambda: self._print_editor_file(file_path))
+        self._icon(print_act, 'print')
+        menu.addAction(print_act)
+
+        menu.addSeparator()
+
+        # ── view / layout ─────────────────────────────────────────────────
+        layout_menu = menu.addMenu("Editor Layout")
+        for mode, label in [("tabbed", "Tabbed"), ("horizontal", "Horizontal"), ("vertical", "Vertical")]:
+            act = QAction(label, layout_menu)
+            act.setCheckable(True)
+            act.setChecked(em.editor_layout_mode == mode)
+            act.triggered.connect(lambda chk, m=mode: self._set_editor_layout(m))
+            layout_menu.addAction(act)
+
+        zoom_in_act = QAction("Zoom In\tCtrl++", menu)
+        zoom_in_act.setEnabled(not is_empty)
+        zoom_in_act.triggered.connect(lambda: self._editor_zoom(file_path, +1))
+        menu.addAction(zoom_in_act)
+
+        zoom_out_act = QAction("Zoom Out\tCtrl+-", menu)
+        zoom_out_act.setEnabled(not is_empty)
+        zoom_out_act.triggered.connect(lambda: self._editor_zoom(file_path, -1))
+        menu.addAction(zoom_out_act)
+
+        menu.addSeparator()
+
+        # ── workflow ──────────────────────────────────────────────────────
+        compile_act = QAction("Compile This File\tF5", menu)
+        compile_act.setEnabled(not is_empty and file_path.lower().endswith('.tex'))
+        compile_act.triggered.connect(lambda: self._compile_file(file_path))
+        self._icon(compile_act, 'compile')
+        menu.addAction(compile_act)
+
+        menu.addSeparator()
+
+        # ── view toggles ──────────────────────────────────────────────────
+        sc = getattr(self.main_window, 'spell_checker', None)
+        if sc is not None:
+            spell_enabled = getattr(sc, 'enabled', False)
+            spell_act = QAction(
+                "Disable Spell Check" if spell_enabled else "Enable Spell Check", menu
+            )
+            spell_act.triggered.connect(
+                lambda: sc._disable_all("") if spell_enabled
+                else sc.set_language(getattr(sc, 'active_language', 'en') or 'en')
+            )
+            menu.addAction(spell_act)
+
+        line_num_act = QAction("Toggle Line Numbers", menu)
+        line_num_act.setCheckable(True)
+        line_num_act.setChecked(getattr(self.main_window, 'is_line_numbers_visible', True))
+        line_num_act.triggered.connect(
+            lambda chk: self.main_window.menu_manager.toggle_line_numbers(chk)
+            if hasattr(self.main_window, 'menu_manager') else None
+        )
+        menu.addAction(line_num_act)
+
+        fold_act = QAction("Toggle Fold Markers", menu)
+        fold_act.setCheckable(True)
+        fold_act.setChecked(getattr(self.main_window, 'is_fold_markers_visible', True))
+        fold_act.triggered.connect(
+            lambda chk: self.main_window.menu_manager.toggle_fold_markers(chk)
+            if hasattr(self.main_window, 'menu_manager') else None
+        )
+        menu.addAction(fold_act)
+
+        menu.addSeparator()
+
+        # ── master document ───────────────────────────────────────────────
+        is_master = (
+            bool(file_path) and
+            hasattr(em, 'get_master_document') and
+            em.get_master_document() == file_path
+        )
+        master_act = QAction(
+            "★  This is the Master Document" if is_master else "Set as Master Document",
+            menu
+        )
+        master_act.setEnabled(
+            not is_empty and
+            file_path.lower().endswith('.tex') and
+            not is_master
+        )
+        master_act.triggered.connect(lambda: self._set_master(file_path))
+        self._icon(master_act, 'flag')
+        menu.addAction(master_act)
+
+        if hasattr(em, 'get_master_document') and em.get_master_document():
+            clear_master_act = QAction(
+                f"Clear Master Document  [{os.path.basename(em.get_master_document())}]",
+                menu
+            )
+            clear_master_act.triggered.connect(lambda: em.clear_master_document())
+            menu.addAction(clear_master_act)
+
+        menu.addSeparator()
+
+        # ── tab appearance & order ────────────────────────────────────────
+        show_full_path_act = QAction("Show Full Path in Tab", menu)
+        show_full_path_act.setCheckable(True)
+        show_full_path_act.setChecked(
+            getattr(self.main_window, '_tabs_show_full_path', False)
+        )
+        show_full_path_act.triggered.connect(
+            lambda chk: self._toggle_full_path_in_tabs(tab_widget, chk)
+        )
+        menu.addAction(show_full_path_act)
+
+        move_left_act = QAction("Move Tab Left", menu)
+        move_left_act.setEnabled(tab_index > 0)
+        move_left_act.triggered.connect(
+            lambda: tab_widget.tabBar().moveTab(tab_index, tab_index - 1)
+        )
+        menu.addAction(move_left_act)
+
+        move_right_act = QAction("Move Tab Right", menu)
+        move_right_act.setEnabled(tab_index < tab_widget.count() - 1)
+        move_right_act.triggered.connect(
+            lambda: tab_widget.tabBar().moveTab(tab_index, tab_index + 1)
+        )
+        menu.addAction(move_right_act)
+
+        # When no file is open, disable everything except Open
+        if is_empty:
+            self._disable_all_except(menu, open_act)
+
+        menu.exec_(tab_bar.mapToGlobal(pos))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PDF tab context menu
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _show_pdf_menu(self, tab_bar, pos):
+        from PyQt5.QtWidgets import QMenu, QAction, QTabWidget
+        tab_index = tab_bar.tabAt(pos)
+        if tab_index < 0:
+            return
+
+        tab_widget = tab_bar.parent()
+        if not isinstance(tab_widget, QTabWidget):
+            return
+
+        pm = self.main_window.pdf_manager
+
+        # ── Resolve viewer and pdf_path ───────────────────────────────────
+        # In tabbed mode: pdf_tabs is a shared QTabWidget; look up by viewer.
+        # In H/V mode: each PDF has its own single-tab QTabWidget stored as
+        # pdf_files[path]['tab_widget']; match by object identity.
+        pdf_path = None
+        viewer   = None
+
+        if hasattr(pm, 'pdf_files'):
+            for path, data in pm.pdf_files.items():
+                if not isinstance(data, dict):
+                    continue
+                # H/V mode: match by the tab_widget object itself
+                if data.get('tab_widget') is tab_widget:
+                    pdf_path = path
+                    viewer   = data.get('viewer')
+                    break
+                # Tabbed mode: match by live indexOf (not stale 'index')
+                v = data.get('viewer')
+                if v is not None:
+                    live_idx = tab_widget.indexOf(v)
+                    if live_idx == tab_index:
+                        pdf_path = path
+                        viewer   = v
+                        data['index'] = live_idx   # keep cache in sync
+                        break
+
+        # Final fallback: widget at that tab position
+        if viewer is None:
+            viewer = tab_widget.widget(tab_index)
+
+        menu = QMenu(tab_bar)
+
+        # ── header ────────────────────────────────────────────────────────
+        label = os.path.basename(pdf_path) if pdf_path else tab_widget.tabText(tab_index)
+        header = QAction(label, menu)
+        f = header.font(); f.setBold(True); header.setFont(f)
+        header.setEnabled(False)
+        menu.addAction(header)
+        menu.addSeparator()
+
+        # ── Open PDF (always available, even when welcome tab is shown) ───
+        is_welcome = pdf_path is None   # True when the panel is empty / on welcome tab
+        open_act = QAction("Open PDF…", menu)
+        open_act.triggered.connect(
+            lambda: pm.open_pdf_file() if hasattr(pm, 'open_pdf_file') else None
+        )
+        self._icon(open_act, 'pdf')
+        menu.addAction(open_act)
+        menu.addSeparator()
+
+        # ── save group ────────────────────────────────────────────────────
+
+        save_as_act = QAction("Save PDF as", menu)
+        save_as_act.setEnabled(bool(pdf_path) and os.path.exists(pdf_path))
+        save_as_act.triggered.connect(lambda: self._pdf_save_as(pdf_path))
+        menu.addAction(save_as_act)
+        
+        menu.addSeparator()
+        
+        toggle_pdf_toolbar_act = QAction("Show Pdf Toolbar\tCtrl+F7", menu)
+        toggle_pdf_toolbar_act.setCheckable(True)
+        toggle_pdf_toolbar_act.setChecked(getattr(self.main_window, 'is_pdf_toolbar_visible', True))
+        toggle_pdf_toolbar_act.toggled.connect(
+            lambda checked: self.main_window.menu_manager.toggle_pdf_toolbar_action.trigger()
+        )
+
+        menu.addAction(toggle_pdf_toolbar_act)
+
+        menu.addSeparator()        
+
+
+        # ── close group ───────────────────────────────────────────────────
+        close_act = QAction("Close", menu)
+        close_act.setEnabled(not is_welcome)
+        close_act.triggered.connect(
+            lambda: pm.close_pdf_tab(tab_index)
+            if hasattr(pm, 'close_pdf_tab') else None
+        )
+        self._icon(close_act, 'close_pdf')
+        menu.addAction(close_act)
+
+        close_others_act = QAction("Close Others", menu)
+        close_others_act.setEnabled(not is_welcome and tab_widget.count() > 1)
+        close_others_act.triggered.connect(
+            lambda: self._pdf_close_others(pm, tab_widget, tab_index)
+        )
+        menu.addAction(close_others_act)
+
+        close_all_act = QAction("Close All PDFs", menu)
+        close_all_act.setEnabled(not is_welcome)
+        close_all_act.triggered.connect(
+            lambda: pm.close_all_pdfs() if hasattr(pm, 'close_all_pdfs') else None
+        )
+        self._icon(close_all_act, 'close_all_pdf')
+        menu.addAction(close_all_act)
+
+        menu.addSeparator()
+
+        # ── file identity ─────────────────────────────────────────────────
+        path_menu = menu.addMenu("Copy Path")
+        for label_txt, fn in [
+            ("Full Path",   lambda: pdf_path or ''),
+            ("File Name",   lambda: os.path.basename(pdf_path) if pdf_path else ''),
+            ("Folder Path", lambda: os.path.dirname(pdf_path) if pdf_path else ''),
+        ]:
+            act = QAction(label_txt, path_menu)
+            act.setEnabled(bool(pdf_path))
+            _fn = fn
+            act.triggered.connect(lambda chk, f=_fn: QApplication.clipboard().setText(f()))
+            path_menu.addAction(act)
+
+        open_folder_act = QAction("Open Containing Folder", menu)
+        open_folder_act.setEnabled(bool(pdf_path) and os.path.exists(str(pdf_path)))
+        open_folder_act.triggered.connect(lambda: self._open_folder(pdf_path))
+        self._icon(open_folder_act, 'folder')
+        menu.addAction(open_folder_act)
+
+        open_external_act = QAction("Open in External Viewer", menu)
+        open_external_act.setEnabled(bool(pdf_path) and os.path.exists(str(pdf_path)))
+        open_external_act.triggered.connect(lambda: self._open_external(pdf_path))
+        menu.addAction(open_external_act)
+
+        menu.addSeparator()
+
+        # ── print ─────────────────────────────────────────────────────────
+        print_act = QAction("Print…", menu)
+        print_act.setEnabled(not is_welcome and viewer is not None and hasattr(viewer, 'print_pdf'))
+        print_act.triggered.connect(lambda: viewer.print_pdf() if viewer else None)
+        self._icon(print_act, 'print')
+        menu.addAction(print_act)
+
+        menu.addSeparator()
+
+        # ── layout & view ─────────────────────────────────────────────────
+        layout_menu = menu.addMenu("PDF Layout")
+        for mode, label in [("tabbed", "Tabbed"), ("horizontal", "Horizontal"), ("vertical", "Vertical")]:
+            act = QAction(label, layout_menu)
+            act.setCheckable(True)
+            act.setChecked(getattr(pm, 'pdf_layout_mode', 'tabbed') == mode)
+            act.triggered.connect(lambda chk, m=mode: self._set_pdf_layout(m))
+            layout_menu.addAction(act)
+
+        zoom_in_act = QAction("Zoom In", menu)
+        zoom_in_act.setEnabled(not is_welcome and viewer is not None)
+        zoom_in_act.triggered.connect(
+            lambda: viewer.zoom_in() if viewer and hasattr(viewer, 'zoom_in') else None
+        )
+        self._icon(zoom_in_act, 'zoom_in')
+        menu.addAction(zoom_in_act)
+
+        zoom_out_act = QAction("Zoom Out", menu)
+        zoom_out_act.setEnabled(not is_welcome and viewer is not None)
+        zoom_out_act.triggered.connect(
+            lambda: viewer.zoom_out() if viewer and hasattr(viewer, 'zoom_out') else None
+        )
+        self._icon(zoom_out_act, 'zoom_out')
+        menu.addAction(zoom_out_act)
+
+        fit_width_act = QAction("Fit to Page Width", menu)
+        fit_width_act.setEnabled(not is_welcome and viewer is not None)
+        fit_width_act.triggered.connect(
+            lambda: viewer.fit_page_width() if viewer and hasattr(viewer, 'fit_page_width') else None
+        )
+        
+        self._icon(fit_width_act, 'fit_width')
+        menu.addAction(fit_width_act)
+
+        fit_page_act = QAction("Fit Page to Window", menu)
+        fit_page_act.setEnabled(not is_welcome and viewer is not None)
+        fit_page_act.triggered.connect(
+            lambda: viewer.fit_page_to_window() if viewer and hasattr(viewer, 'fit_page_to_window') else None
+        )
+        self._icon(fit_page_act, 'fit_page')
+        menu.addAction(fit_page_act)
+
+        menu.addSeparator()
+
+        # ── tab order ─────────────────────────────────────────────────────
+        move_left_act = QAction("Move Tab Left", menu)
+        move_left_act.setEnabled(tab_index > 0)
+        move_left_act.triggered.connect(
+            lambda: tab_widget.tabBar().moveTab(tab_index, tab_index - 1)
+        )
+        menu.addAction(move_left_act)
+
+        move_right_act = QAction("Move Tab Right", menu)
+        move_right_act.setEnabled(tab_index < tab_widget.count() - 1)
+        move_right_act.triggered.connect(
+            lambda: tab_widget.tabBar().moveTab(tab_index, tab_index + 1)
+        )
+        menu.addAction(move_right_act)
+
+        # When no PDF is open (welcome tab), disable everything except Open PDF
+        if is_welcome:
+            self._disable_all_except(menu, open_act)
+
+        menu.exec_(tab_bar.mapToGlobal(pos))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Editor action helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _disable_all_except(menu, keep_action):
+        """Disable every action in *menu* (and all submenus) except *keep_action*.
+
+        Called when the panel is empty so only the Open item stays active.
+        """
+        def _walk(m):
+            for action in m.actions():
+                if action is keep_action:
+                    continue
+                if action.isSeparator():
+                    continue
+                if action.menu():
+                    _walk(action.menu())
+                    action.setEnabled(False)
+                else:
+                    action.setEnabled(False)
+        _walk(menu)
+
+    def _editor_open(self):
+        """Open a file via the editor manager's file dialog."""
+        em = self.main_window.editor_manager
+        if hasattr(em, 'open_file'):
+            em.open_file()
+
+    def _editor_save(self, file_path):
+        self.main_window.editor_manager.save_file(path=file_path)
+
+    def _editor_close_tab(self, tab_widget, tab_index, file_path):
+        em = self.main_window.editor_manager
+        if file_path:
+            tab_widget.setCurrentIndex(tab_index)
+            em.close_current_file()
+        else:
+            tab_widget.removeTab(tab_index)
+
+    def _editor_close_others(self, tab_widget, keep_index):
+        em = self.main_window.editor_manager
+        paths_to_close = []
+        for i in range(tab_widget.count()):
+            if i != keep_index:
+                paths_to_close.append(self._file_path_for_tab(tab_widget, i))
+        for path in paths_to_close:
+            if path and path in em.editor_files:
+                idx = self._tab_index_for_path(tab_widget, path)
+                if idx >= 0:
+                    tab_widget.setCurrentIndex(idx)
+                    em.close_current_file()
+
+    def _editor_close_all(self, tab_widget):
+        em = self.main_window.editor_manager
+        paths = [self._file_path_for_tab(tab_widget, i)
+                 for i in range(tab_widget.count())]
+        for path in paths:
+            if path and path in em.editor_files:
+                idx = self._tab_index_for_path(tab_widget, path)
+                if idx >= 0:
+                    tab_widget.setCurrentIndex(idx)
+                    em.close_current_file()
+
+    def _compile_file(self, file_path):
+        em = self.main_window.editor_manager
+        cm = getattr(self.main_window, 'compilation_manager', None)
+        if not cm:
+            return
+        master = em.get_master_document() if hasattr(em, 'get_master_document') else None
+        if master and master != file_path:
+            from PyQt5.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self.main_window.window(),
+                "Master Document Set",
+                f"A master document is set:\n{os.path.basename(master)}\n\n"
+                f"Compile the master document instead of\n{os.path.basename(file_path)}?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.Yes:
+                cm.compile_latex(self.main_window.latex_engine)
+                return
+        old_current = em.current_file
+        em.current_file = file_path
+        try:
+            cm.compile_latex(self.main_window.latex_engine)
+        finally:
+            em.current_file = old_current
+
+    def _print_editor_file(self, file_path):
+        pdf_path = os.path.splitext(file_path)[0] + '.pdf' if file_path else None
+        if pdf_path and os.path.exists(pdf_path):
+            pm = getattr(self.main_window, 'pdf_manager', None)
+            if pm:
+                viewer = self._get_viewer_for_pdf(pm, pdf_path)
+                if viewer and hasattr(viewer, 'print_pdf'):
+                    viewer.print_pdf()
+                    return
+        if file_path and os.path.exists(file_path):
+            import subprocess, sys
+            if sys.platform == 'win32':
+                os.startfile(file_path, 'print')
+            else:
+                subprocess.Popen(['lpr', file_path])
+
+    def _editor_zoom(self, file_path, direction):
+        em = self.main_window.editor_manager
+        editor = None
+        if file_path and file_path in em.editor_files:
+            editor = em.editor_files[file_path].get('editor')
+        if not editor:
+            editor = em.get_current_editor()
+        if not editor:
+            return
+        font = editor.font()
+        size = max(6, font.pointSize() + direction)
+        font.setPointSize(size)
+        editor.setFont(font)
+
+    def _set_editor_layout(self, mode):
+        em = self.main_window.editor_manager
+        lm = getattr(self.main_window, 'layout_manager', None)
+        if not lm or em.editor_layout_mode == mode:
+            return
+        for _ in range(3):
+            if em.editor_layout_mode == mode:
+                break
+            lm.toggle_editor_layout()
+
+    def _set_pdf_layout(self, mode):
+        pm = self.main_window.pdf_manager
+        lm = getattr(self.main_window, 'layout_manager', None)
+        if not lm or pm.pdf_layout_mode == mode:
+            return
+        for _ in range(3):
+            if pm.pdf_layout_mode == mode:
+                break
+            lm.toggle_pdf_layout()
+
+    def _rename_file(self, old_path, tab_widget, tab_index):
+        from PyQt5.QtWidgets import QInputDialog, QMessageBox
+        if not old_path or not os.path.exists(old_path):
+            return
+        old_name = os.path.basename(old_path)
+        new_name, ok = QInputDialog.getText(
+            self.main_window.window(), "Rename File",
+            "New file name:", text=old_name
+        )
+        if not ok or not new_name.strip() or new_name == old_name:
+            return
+        new_path = os.path.join(os.path.dirname(old_path), new_name.strip())
+        if os.path.exists(new_path):
+            QMessageBox.warning(
+                self.main_window.window(), "Rename Failed",
+                f"A file named '{new_name}' already exists in that folder."
+            )
+            return
+        try:
+            os.rename(old_path, new_path)
+        except OSError as e:
+            QMessageBox.critical(self.main_window.window(), "Rename Failed", str(e))
+            return
+        em = self.main_window.editor_manager
+        if old_path in em.editor_files:
+            em.editor_files[new_path] = em.editor_files.pop(old_path)
+        if em.current_file == old_path:
+            em.current_file = new_path
+        if hasattr(em, 'master_file') and em.master_file == old_path:
+            em.master_file = new_path
+        tab_widget.setTabText(tab_index, os.path.basename(new_path))
+        self.main_window.update_status_bar(f"Renamed to {new_name}")
+
+    def _set_master(self, file_path):
+        em = self.main_window.editor_manager
+        if hasattr(em, 'set_master_document'):
+            try:
+                em.set_master_document(file_path)
+            except ValueError as e:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self.main_window.window(), "Master Document", str(e))
+
+    def _toggle_full_path_in_tabs(self, tab_widget, show_full):
+        self.main_window._tabs_show_full_path = show_full
+        em = self.main_window.editor_manager
+        for path, data in em.editor_files.items():
+            editor = data.get('editor')
+            if not editor:
+                continue
+            idx = self._tab_index_for_editor(tab_widget, editor)
+            if idx >= 0:
+                is_mod = data.get('modified', False)
+                label = path if show_full else os.path.basename(path)
+                if is_mod:
+                    label = '*' + label
+                if hasattr(em, 'master_file') and em.master_file == path:
+                    label = '★ ' + label
+                tab_widget.setTabText(idx, label)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PDF action helpers
+    # ─────────────────────────────────────────────────────────────────────────
+    def _pdf_save_as(self, file_path):
+        """Save a copy of the PDF to a user‑selected location."""
+        if not file_path or not os.path.exists(file_path):
+            return
+        from PyQt5.QtWidgets import QFileDialog
+        from shutil import copy2
+        # Use the full path so the dialog opens in the PDF's own directory
+        default_save_path = os.path.join(os.path.dirname(file_path), os.path.basename(file_path))
+        save_path, _ = QFileDialog.getSaveFileName(
+            self.main_window,
+            "Save PDF As",
+            default_save_path,
+            "PDF Files (*.pdf)"
+        )
+        if save_path:
+            try:
+                copy2(file_path, save_path)
+                self.main_window.update_status_bar(f"PDF saved as: {save_path}")
+            except Exception as e:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    self.main_window,
+                    "Save Failed",
+                    f"Could not save PDF:\n{str(e)}"
+                )
+    def _pdf_close_others(self, pm, tab_widget, keep_index):
+        for i in range(tab_widget.count() - 1, -1, -1):
+            if i != keep_index and hasattr(pm, 'close_pdf_tab'):
+                pm.close_pdf_tab(i)
+
+    def _get_viewer_for_pdf(self, pm, pdf_path):
+        if not hasattr(pm, 'pdf_files'):
+            return None
+        entry = pm.pdf_files.get(pdf_path)
+        if entry:
+            return entry[0] if isinstance(entry, tuple) else entry.get('viewer')
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Lookup utilities
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _file_path_for_tab(self, tab_widget, tab_index):
+        em = self.main_window.editor_manager
+        widget = tab_widget.widget(tab_index)
+        for path, data in em.editor_files.items():
+            if data.get('editor') == widget:
+                return path
+        return None
+
+    def _tab_index_for_path(self, tab_widget, file_path):
+        em = self.main_window.editor_manager
+        data = em.editor_files.get(file_path, {})
+        editor = data.get('editor')
+        if editor:
+            return self._tab_index_for_editor(tab_widget, editor)
+        return -1
+
+    @staticmethod
+    def _tab_index_for_editor(tab_widget, editor):
+        for i in range(tab_widget.count()):
+            if tab_widget.widget(i) == editor:
+                return i
+        return -1
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Shared utilities
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _open_folder(path):
+        if not path:
+            return
+        folder = os.path.dirname(path) if os.path.isfile(path) else path
+        import subprocess, sys
+        if sys.platform == 'win32':
+            import subprocess
+            subprocess.Popen(['explorer', os.path.normpath(folder)])
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', folder])
+        else:
+            subprocess.Popen(['xdg-open', folder])
+
+    @staticmethod
+    def _open_external(path):
+        if not path:
+            return
+        import subprocess, sys
+        if sys.platform == 'win32':
+            os.startfile(path)
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', '-t', path])
+        else:
+            subprocess.Popen(['gedit', path])
+
+    def _icon(self, action, name):
+        im = getattr(self.main_window, 'icons_manager', None)
+        if im and hasattr(im, 'apply_icon_to_action'):
+            im.apply_icon_to_action(action, name)
+
