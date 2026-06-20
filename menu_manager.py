@@ -419,6 +419,36 @@ class MenuManager:
         save_copy_action.triggered.connect(self.main_window.editor_manager.save_copy_as)
         self.icons_manager.apply_icon_to_action(save_copy_action, "save_copy_as")   # you may need a dedicated icon
         file_menu.addAction(save_copy_action)
+        file_menu.addSeparator()
+        # ── Master Document ───────────────────────────────────────────────
+        self.set_master_action = QAction(
+            tr.get("set_master_document", "Set as Master Document"),
+            self.main_window
+        )
+        self.set_master_action.setStatusTip(
+            tr.get("status_set_master_document",
+                   "Mark the active .tex file as the master document for compilation")
+        )
+        self.icons_manager.apply_icon_to_action(self.set_master_action, "flag")
+        self.set_master_action.triggered.connect(self._set_master_document)
+        file_menu.addAction(self.set_master_action)
+
+        self.clear_master_action = QAction(
+            tr.get("clear_master_document", "Clear Master Document"),
+            self.main_window
+        )
+        self.clear_master_action.setStatusTip(
+            tr.get("status_clear_master_document",
+                   "Remove master document designation — compile the foreground file instead")
+        )
+        #self.icons_manager.apply_icon_to_action(self.clear_master_action, "clear_master")
+        self.clear_master_action.triggered.connect(self._clear_master_document)
+        file_menu.addAction(self.clear_master_action)
+
+        # Keep action states fresh whenever the File menu opens
+        file_menu.aboutToShow.connect(self._update_master_actions_state)
+        self._update_master_actions_state()   # set initial state
+        # ─────────────────────────────────────────────────────────────────
         file_menu.addSeparator()        
         # Close Tex File
         close_tex_action = QAction(tr["close_tex"], self.main_window)
@@ -685,86 +715,6 @@ class MenuManager:
         """Open all recent files (delayed to allow menu to close)"""
         QTimer.singleShot(10, self._do_open_all_recent_files)
 
-    # def _do_open_all_recent_files(self):
-        # """Actual batch opening after menu has closed"""
-        # if not hasattr(self.main_window, 'config_manager'):
-            # return
-
-        # from PyQt5.QtWidgets import QMessageBox, QProgressDialog
-        # from PyQt5.QtCore import Qt
-        # from PyQt5.QtWidgets import QApplication
-
-        # recent_files = self.main_window.config_manager.get_recent_files()
-        # if not recent_files:
-            # QMessageBox.information(
-                # self.main_window,
-                # "No Recent Files",
-                # "No recent files to open."
-            # )
-            # return
-
-        # # Filter existing files
-        # existing_files = [f for f in recent_files if os.path.exists(f)]
-        # if not existing_files:
-            # QMessageBox.information(
-                # self.main_window,
-                # "No Files Found",
-                # "None of the recent files could be found."
-            # )
-            # return
-
-        # if len(existing_files) > 5:
-            # reply = QMessageBox.question(
-                # self.main_window,
-                # "Open Many Files",
-                # f"This will open {len(existing_files)} files. Continue?",
-                # QMessageBox.Yes | QMessageBox.No
-            # )
-            # if reply != QMessageBox.Yes:
-                # return
-
-        # # Progress dialog (only if many files)
-        # progress = None
-        # if len(existing_files) > 3:
-            # progress = QProgressDialog(
-                # "Opening files...",
-                # "Cancel",
-                # 0,
-                # len(existing_files),
-                # self.main_window
-            # )
-            # progress.setWindowTitle("Opening files, please wait...")
-            # progress.setMinimumWidth(400)
-            # progress.setWindowModality(Qt.WindowModal)
-            # progress.show()
-
-        # opened_count = 0
-        # for i, file_path in enumerate(existing_files):
-            # if progress and progress.wasCanceled():
-                # break
-            # try:
-                # self.main_window.editor_manager.open_specific_file(file_path)
-                # opened_count += 1
-                # if progress:
-                    # progress.setValue(i + 1)
-                    # progress.setLabelText(f"Opened {os.path.basename(file_path)}")
-                    # QApplication.processEvents()
-            # except Exception as e:
-                # print(f"Error opening {file_path}: {e}")
-
-        # if progress:
-            # progress.close()
-
-        # if opened_count > 0:
-            # self.main_window.update_status_bar(f"Opened {opened_count} files")
-        # else:
-            # QMessageBox.warning(
-                # self.main_window,
-                # "Open Error",
-                # "Could not open any recent files."
-            # )
-
-        # self.update_recent_files_menu()
         
     def _do_open_all_recent_files(self):
         """Actual batch opening after menu has closed, with wait cursor"""
@@ -867,6 +817,13 @@ class MenuManager:
             if hasattr(self.main_window, 'config_manager'):
                 self.main_window.config_manager.clear_recent_files()
             self.update_recent_files_menu()
+            # Refresh the editor welcome page immediately if it is currently showing
+            # (welcome page is visible only when no editor files are open)
+            em = self.main_window.editor_manager
+            if not getattr(em, 'editor_files', None):
+                lm = getattr(self.main_window, 'layout_manager', None)
+                if lm and hasattr(lm, '_safe_recreate_editor_container'):
+                    QTimer.singleShot(0, lm._safe_recreate_editor_container)
 
     def get_current_editor_or_warn(self):
         lang = self.main_window.menu_language
@@ -1262,16 +1219,16 @@ class MenuManager:
         view_menu.addAction(self.toggle_tooltips_action)
         view_menu.addSeparator()
         # Show/Hide PDF Toolbar
-        toggle_pdf_toolbar_action = QAction(tr["show_pdf_toolbar"], self.main_window)
-        toggle_pdf_toolbar_action.setShortcut("Ctrl+F7")
-        toggle_pdf_toolbar_action.setCheckable(True)
-        toggle_pdf_toolbar_action.setChecked(True)  # Default: toolbars visible
-        self._make_rtl_checkable(toggle_pdf_toolbar_action)
-        toggle_pdf_toolbar_action.setStatusTip(tr["status_show_pdf_toolbar"])
-        toggle_pdf_toolbar_action.triggered.connect(self.main_window.toggle_pdf_toolbars)
-        view_menu.addAction(toggle_pdf_toolbar_action)
+        self.toggle_pdf_toolbar_action = QAction(tr["show_pdf_toolbar"], self.main_window)
+        self.toggle_pdf_toolbar_action.setShortcut("Ctrl+F7")
+        self.toggle_pdf_toolbar_action.setCheckable(True)
+        self.toggle_pdf_toolbar_action.setChecked(True)  # Default: toolbars visible
+        self._make_rtl_checkable(self.toggle_pdf_toolbar_action)
+        self.toggle_pdf_toolbar_action.setStatusTip(tr["status_show_pdf_toolbar"])
+        self.toggle_pdf_toolbar_action.triggered.connect(self.main_window.toggle_pdf_toolbars)
+        view_menu.addAction(self.toggle_pdf_toolbar_action)
         # Store reference for updating state
-        self.main_window.menu_pdf_toolbar_toggle_action = toggle_pdf_toolbar_action
+        self.main_window.menu_pdf_toolbar_toggle_action = self.toggle_pdf_toolbar_action
 
         # Show/Hide DjVu Toolbar
         toggle_djvu_toolbar_action = QAction(tr.get("show_djvu_toolbar", "Show DjVu Toolbar"), self.main_window)
@@ -2384,7 +2341,7 @@ class MenuManager:
 
     def clear_recent_pdf_files(self):
         """Clear all recent PDF files from the list."""
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt5.QtWidgets import QMessageBox, QTabWidget
         # ✅ Add confirmation dialog
         reply = QMessageBox.question(
             self.main_window,
@@ -2399,11 +2356,20 @@ class MenuManager:
                     self.main_window.config_manager.clear_recent_pdf_files()
                     # Update the menu to reflect changes
                     self.update_recent_pdf_files_menu()
-                    QMessageBox.information(
-                        self.main_window,
-                        "Success",
-                        "Recent PDF files cleared successfully."
-                    )
+                    # Refresh the PDF welcome page immediately if it is currently showing.
+                    # The welcome is visible when pdf_tabs is a QTabWidget whose only tab
+                    # is the welcome frame (objectName == "pdf_welcome_outer_frame").
+                    lm = getattr(self.main_window, 'layout_manager', None)
+                    if lm and hasattr(lm, '_recreate_pdf_container'):
+                        pdf_tabs = getattr(self.main_window.pdf_manager, 'pdf_tabs', None)
+                        welcome_showing = False
+                        if isinstance(pdf_tabs, QTabWidget):
+                            if pdf_tabs.count() == 1:
+                                w = pdf_tabs.widget(0)
+                                if w and w.objectName() == "pdf_welcome_outer_frame":
+                                    welcome_showing = True
+                        if welcome_showing:
+                            QTimer.singleShot(0, lm._recreate_pdf_container)
                 else:
                     QMessageBox.warning(
                         self.main_window,
@@ -2431,6 +2397,102 @@ class MenuManager:
             else:
                 menu_items.append(f"{i}. {filename} (missing)")
         return menu_items, recent_files  
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Master Document helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _update_master_actions_state(self):
+        """Enable/disable and relabel master document menu actions."""
+        em = self.main_window.editor_manager
+        current_file  = em.get_current_file_path()
+        master_file   = em.get_master_document()
+        has_tex_open  = bool(current_file and current_file.lower().endswith('.tex'))
+
+        # "Set as Master" — enabled when a saved .tex file is active AND it is
+        # not already the master.
+        already_master = (master_file is not None and master_file == current_file)
+        self.set_master_action.setEnabled(has_tex_open and not already_master)
+
+        # Show which file is currently the master in the action text
+        if master_file:
+            label = self.main_window.translations[self.main_window.menu_language].get(
+                "set_master_document", "Set as Master Document"
+            )
+            self.set_master_action.setText(label)
+            self.clear_master_action.setEnabled(True)
+            self.clear_master_action.setText(
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "clear_master_document", "Clear Master Document"
+                ) + f"  [{os.path.basename(master_file)}]"
+            )
+        else:
+            self.set_master_action.setText(
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "set_master_document", "Set as Master Document"
+                )
+            )
+            self.clear_master_action.setEnabled(False)
+            self.clear_master_action.setText(
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "clear_master_document", "Clear Master Document"
+                )
+            )
+
+    def _set_master_document(self):
+        """Slot: set the currently active .tex file as the master document."""
+        em = self.main_window.editor_manager
+        current_file = em.get_current_file_path()
+
+        if not current_file:
+            QMessageBox.warning(
+                self.main_window,
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "no_file_open", "No file open"
+                ),
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "open_a_latex_file",
+                    "Please open a LaTeX file first."
+                )
+            )
+            return
+
+        try:
+            em.set_master_document(current_file)
+            self._update_master_actions_state()
+            QMessageBox.information(
+                self.main_window.window(),
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "master_document_set", "Master Document Set"
+                ),
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "master_document_set_msg",
+                    "Master document set to:\n{file}\n\n"
+                    "Compilation will now always use this file, regardless of "
+                    "which tab is active."
+                ).format(file=current_file)
+            )
+        except ValueError as e:
+            QMessageBox.warning(self.main_window.window(), "Master Document", str(e))
+
+    def _clear_master_document(self):
+        """Slot: remove the master document designation."""
+        em = self.main_window.editor_manager
+        old_master = em.get_master_document()
+        em.clear_master_document()
+        self._update_master_actions_state()
+        if old_master:
+            QMessageBox.information(
+                self.main_window.window(),
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "master_document_cleared", "Master Document Cleared"
+                ),
+                self.main_window.translations[self.main_window.menu_language].get(
+                    "master_document_cleared_msg",
+                    "Master document designation removed.\n\n"
+                    "Compilation will now target the foreground (active) file."
+                )
+            )
 
     def show_error(self, title, message):
         """Show error message dialog"""
