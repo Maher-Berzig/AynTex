@@ -18,6 +18,7 @@ class EditorManager:
         self.main_window = main_window
         self.editor_files = {}  # {path: {editor, pdf_path, modified, saved_content, index, tab_widget_index, label}}
         self.current_file = None
+        self.master_file = None   # Path of the project master .tex document (None = use foreground file)
         self.is_modified = False
         self.editor_layout_mode = "tabbed"  # tabbed, horizontal, vertical
         self.current_sizes = {"editor": []}
@@ -53,6 +54,7 @@ class EditorManager:
             self.editor_tabs.setTabsClosable(True)
             self.editor_tabs.tabCloseRequested.connect(self.close_editor_tab)
             self.editor_tabs.setMinimumSize(300, 200)
+
 ###
     def _get_relative_path(self, target_path, base_path):
         """Return relative path from base_path's directory to target_path."""
@@ -112,28 +114,22 @@ class EditorManager:
     
 
 ###
-
-    
     def on_tab_changed(self, index):
-        """Handle tab change event"""
         if index < 0:
             return
-
-        mode = self.editor_layout_mode
         editor = None
-
-        if mode == "tabbed":
+        if self.editor_layout_mode == "tabbed":
             if self.editor_tabs and isinstance(self.editor_tabs, QTabWidget):
                 editor = self.editor_tabs.widget(index)
         else:
-            for tab_widget in self.editor_tabs:
-                if tab_widget and tab_widget.currentIndex() == index:
-                    editor = tab_widget.widget(index)
-                    break
-
+            # H/V mode: find the tab widget that has a tab at this index
+            for tw in self.editor_tabs:
+                if tw and tw.count() > index:
+                    editor = tw.widget(index)
+                    if editor:
+                        break
         if editor:
             self.update_current_file_from_editor(editor)
-            # update_current_file_from_editor already calls _highlight_active_editor(editor)
             self.main_window.update_title()
             
     def _on_hv_tab_bar_clicked(self, index, editor):
@@ -664,8 +660,9 @@ class EditorManager:
             self.apply_visibility_settings_to_editor(editor)
 
             
-            # FORCE: Ensure no context menu policy interference
-            editor.setContextMenuPolicy(Qt.DefaultContextMenu)
+            # NOTE: Do NOT set Qt.DefaultContextMenu here — it would override
+            # ContextMenuManager.install_context_menu() which sets CustomContextMenu.
+            # The custom context menu is installed after this method returns.
 
             # Install completers on new editor
             if hasattr(self.main_window, 'latex_completer_manager'):
@@ -1081,7 +1078,11 @@ class EditorManager:
                 # Find and remove the tab widget
                 for tab_widget in self.editor_tabs[:]:  # ✅ Copy to avoid modification during iteration
                     if tab_widget and tab_widget.indexOf(editor) != -1:
+                        # Detach context menu filter before destroying
+                        self._detach_tab_context_filter(tab_widget)
+                        tab_widget.hide()
                         tab_widget.setParent(None)
+                        tab_widget.deleteLater()
                         try:
                             self.editor_tabs.remove(tab_widget)
                         except ValueError:
@@ -1384,6 +1385,25 @@ class EditorManager:
         tab_widget.setTabsClosable(False)
         tab_widget.setCurrentIndex(tab_widget.count() - 1)
 
+    def _detach_tab_context_filter(self, tab_widget):
+        """Detach any TabContextMenu event filter from tab_widget before it is destroyed."""
+        tcm = getattr(self.main_window, 'tab_context_menu', None)
+        if tcm is None:
+            return
+        surviving = []
+        for f in tcm._filters:
+            if getattr(f, '_tab_bar', None) is not None:
+                try:
+                    # Check if this filter belongs to the given tab_widget
+                    if f._tab_bar.parent() is tab_widget:
+                        f.detach()
+                        tcm._pdf_filters.discard(f)
+                        continue
+                except RuntimeError:
+                    pass
+            surviving.append(f)
+        tcm._filters = surviving
+
     def _remove_welcome_tabs_if_needed(self):
         """Remove welcome tabs when adding real content"""
         try:
@@ -1407,7 +1427,11 @@ class EditorManager:
                                     welcome_only = False
                                     break
                             if welcome_only:
+                                # Detach context menu filter BEFORE orphaning the widget
+                                self._detach_tab_context_filter(tab_widget)
+                                tab_widget.hide()
                                 tab_widget.setParent(None)
+                                tab_widget.deleteLater()
                                 try:
                                     self.editor_tabs.remove(tab_widget)
                                 except ValueError:
@@ -2512,7 +2536,7 @@ class EditorManager:
 
 
     def _update_tab_title(self, file_path, is_modified):
-        """Update tab title with modified indicator"""
+        """Update tab title with modified indicator and master-document star."""
         if not file_path or file_path not in self.editor_files:
             return
         
@@ -2527,6 +2551,9 @@ class EditorManager:
             display_name = os.path.basename(file_path)
             if is_modified:
                 display_name = "*" + display_name
+            # Show ★ prefix for the master document
+            if getattr(self, 'master_file', None) == file_path:
+                display_name = "⚑ " + display_name
             
             # Update tab text based on layout mode
             mode = self.editor_layout_mode
@@ -3916,3 +3943,97 @@ Your content goes here.
         editor = self.get_current_editor()
         if editor and hasattr(editor, 'toggle_bibliography_fold'):
             editor.toggle_bibliography_fold()
+    # ─────────────────────────────────────────────────────────────────────────
+    # Master Document API
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_compile_target(self):
+        """Return the file that should be passed to the LaTeX compiler.
+
+        If a master document is set and still exists on disk, that file is
+        returned regardless of which tab is currently active.  Otherwise the
+        currently-active file is returned (i.e. the classic behaviour).
+        """
+        if self.master_file and os.path.exists(self.master_file):
+            return self.master_file
+        return self.get_current_file_path()
+
+    def get_master_document(self):
+        """Return the current master file path, or None."""
+        if self.master_file and os.path.exists(self.master_file):
+            return self.master_file
+        return None
+
+    def set_master_document(self, file_path):
+        """Mark *file_path* as the master document.
+
+        Raises ValueError if the file is unsaved (path is None), does not end
+        with .tex, or does not exist on disk.
+        """
+        if not file_path:
+            raise ValueError("Cannot set an unsaved file as master document. Please save it first.")
+        if not file_path.lower().endswith('.tex'):
+            raise ValueError("Only .tex files can be set as master document.")
+        if not os.path.exists(file_path):
+            raise ValueError(f"File not found: {file_path}")
+
+        old_master = self.master_file
+        self.master_file = file_path
+
+        # Persist via config_manager if available
+        if hasattr(self.main_window, 'config_manager'):
+            try:
+                self.main_window.config_manager.set_config_value(
+                    'project', 'master_file', file_path
+                )
+                self.main_window.config_manager.save_config()
+            except Exception as e:
+                print(f"⚠️ Could not persist master file to config: {e}")
+
+        # Refresh tab titles so the star indicator updates
+        self._refresh_all_tab_titles()
+
+        # Update status bar
+        if hasattr(self.main_window, 'update_status_bar'):
+            self.main_window.update_status_bar(
+                f"Master document set: {os.path.basename(file_path)}"
+            )
+
+    def clear_master_document(self):
+        """Remove the master document designation; compilation reverts to the
+        foreground (active) file."""
+        self.master_file = None
+
+        if hasattr(self.main_window, 'config_manager'):
+            try:
+                self.main_window.config_manager.set_config_value(
+                    'project', 'master_file', ''
+                )
+                self.main_window.config_manager.save_config()
+            except Exception as e:
+                print(f"⚠️ Could not clear master file from config: {e}")
+
+        self._refresh_all_tab_titles()
+
+        if hasattr(self.main_window, 'update_status_bar'):
+            self.main_window.update_status_bar("Master document cleared — using foreground file")
+
+    def _refresh_all_tab_titles(self):
+        """Force a redraw of every open tab title (e.g. after master changes)."""
+        for path, data in self.editor_files.items():
+            is_modified = data.get('modified', False)
+            self._update_tab_title(path, is_modified)
+
+    def restore_master_from_config(self):
+        """Called at startup to reload the persisted master file path."""
+        if not hasattr(self.main_window, 'config_manager'):
+            return
+        try:
+            path = self.main_window.config_manager.get_config_value(
+                'project', 'master_file', fallback=''
+            )
+            if path and os.path.exists(path):
+                self.master_file = path
+                self._refresh_all_tab_titles()
+        except Exception as e:
+            print(f"⚠️ Could not restore master file from config: {e}")
