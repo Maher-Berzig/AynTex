@@ -392,9 +392,11 @@ class PDFManager:
                 # ✅ Use the same foreground logic as refresh_pdf()
                 if path in self.pdf_files:
                     data = self.pdf_files[path]
-                    if self.pdf_layout_mode == "tabbed" and self.pdf_tabs:
-                        index = data.get('index', -1)
-                        if 0 <= index < self.pdf_tabs.count():
+                    viewer = data.get('viewer')
+                    if viewer and self.pdf_layout_mode == "tabbed" and self.pdf_tabs:
+                        index = self.pdf_tabs.indexOf(viewer)
+                        if index >= 0:
+                            data['index'] = index
                             self.pdf_tabs.setCurrentIndex(index)
                             viewer.setFocus()
                 
@@ -1192,13 +1194,17 @@ class PDFManager:
                     data = self.pdf_files[pdf_path]
                     viewer = data.get('viewer')
                     if viewer and self.pdf_layout_mode == "tabbed" and self.pdf_tabs:
-                        index = data.get('index', -1)
-                        if 0 <= index < self.pdf_tabs.count():
+                        # Always use live indexOf — tab order may have changed
+                        # via moveTab() since 'index' was last written.
+                        index = self.pdf_tabs.indexOf(viewer)
+                        if index >= 0:
+                            data['index'] = index   # keep cache in sync
                             self.pdf_tabs.setCurrentIndex(index)
                             viewer.setFocus()
                     # ✅ FIX: Highlight the refreshed viewer
                     if viewer:
-                        self._highlight_active_pdf_viewer(viewer)        
+                        self._highlight_active_pdf_viewer(viewer)
+
             else:
                 self.main_window.update_status_bar(
                     self.main_window.translations[self.main_window.menu_language]["status_pdf_not_found"]
@@ -1236,12 +1242,10 @@ class PDFManager:
                     if reload_success:
                         # Bring THIS specific PDF to foreground
                         if self.pdf_layout_mode == "tabbed" and self.pdf_tabs:
-                            index = data.get('index', -1)
-                            if index == -1:
-                                index = self.pdf_tabs.indexOf(viewer)
-                                if index != -1:
-                                    data['index'] = index
-                            if 0 <= index < self.pdf_tabs.count():
+                            # Always resolve live — moveTab() invalidates 'index'
+                            index = self.pdf_tabs.indexOf(viewer)
+                            if index >= 0:
+                                data['index'] = index   # keep cache in sync
                                 self.pdf_tabs.setCurrentIndex(index)
                                 viewer.setFocus()
 
@@ -1921,6 +1925,11 @@ class PDFManager:
         welcome_tab.setObjectName("pdf_welcome_tab")
         welcome_tab.addTab(welcome_content, "PDF Viewer")
         welcome_tab.setTabsClosable(False)
+        # NoFocus ensures right-click is not absorbed by the welcome content
+        # on the first click — the _TabBarFilter receives QEvent.ContextMenu
+        # immediately without needing a prior focus-grab click.
+        welcome_tab.setFocusPolicy(Qt.NoFocus)
+        welcome_content.setFocusPolicy(Qt.NoFocus)
 
         # Style with current theme instead of hardcoded white
         welcome_tab.setStyleSheet(f"""
@@ -1985,6 +1994,14 @@ class PDFManager:
         # ✅ FIX: Pre-connect signals on the new tab widget
         self.pdf_tabs.currentChanged.connect(self.on_pdf_tab_changed)
         self.pdf_tabs.tabBarClicked.connect(self._on_pdf_tab_bar_clicked)
+
+        # ✅ FIX: Install tab context-menu filter on the new welcome tab bar.
+        # _show_pdf_welcome_tab() creates a brand-new QTabWidget every time it
+        # runs (on startup AND whenever the last PDF is closed), so we must
+        # re-attach the _TabBarFilter here — otherwise right-clicking the
+        # "PDF Viewer" tab when the panel is empty shows nothing.
+        if hasattr(self.main_window, 'tab_context_menu'):
+            self.main_window.tab_context_menu.reinstall_pdf()
 
         
                
