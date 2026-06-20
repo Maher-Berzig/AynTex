@@ -262,7 +262,28 @@ class SidePanel(QWidget):
 
         self.update_scroll_buttons()
 
+        # ── Right-click context menu ──────────────────────────────────────
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+        self.scroll_area.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.scroll_area.customContextMenuRequested.connect(self._show_context_menu)
+        self.buttons_container.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.buttons_container.customContextMenuRequested.connect(self._show_context_menu)
 
+    def _show_context_menu(self, pos):
+        """Right-click context menu for the side panel."""
+        from PyQt5.QtWidgets import QMenu, QAction
+        menu = QMenu(self)
+        
+        action = self.main_window.menu_manager.toggle_visibility_action
+        is_visible = action.isChecked()
+        text = "Hide Side Panel (F9)" if is_visible else "Show Side Panel (F9)"
+        
+        hide_action = QAction(text, self)
+        hide_action.triggered.connect(lambda: action.trigger())
+        menu.addAction(hide_action)
+        menu.exec_(self.mapToGlobal(pos))
+       
     def show_quick_jump(self):
         if self._quick_jump is None:
             self._quick_jump = QuickJumpPopup(self.main_window)
