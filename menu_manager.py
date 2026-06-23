@@ -2357,19 +2357,23 @@ class MenuManager:
                     # Update the menu to reflect changes
                     self.update_recent_pdf_files_menu()
                     # Refresh the PDF welcome page immediately if it is currently showing.
-                    # The welcome is visible when pdf_tabs is a QTabWidget whose only tab
-                    # is the welcome frame (objectName == "pdf_welcome_outer_frame").
-                    lm = getattr(self.main_window, 'layout_manager', None)
-                    if lm and hasattr(lm, '_recreate_pdf_container'):
-                        pdf_tabs = getattr(self.main_window.pdf_manager, 'pdf_tabs', None)
+                    # pdf_tabs.widget(0) can carry any of these objectNames depending
+                    # on which code path created the welcome tab.
+                    pm = getattr(self.main_window, 'pdf_manager', None)
+                    if pm:
+                        pdf_tabs = getattr(pm, 'pdf_tabs', None)
                         welcome_showing = False
                         if isinstance(pdf_tabs, QTabWidget):
                             if pdf_tabs.count() == 1:
                                 w = pdf_tabs.widget(0)
-                                if w and w.objectName() == "pdf_welcome_outer_frame":
+                                if w and w.objectName() in (
+                                    "pdf_welcome_outer_frame",
+                                    "pdf_welcome_widget",
+                                    "pdf_welcome_tab",
+                                ):
                                     welcome_showing = True
                         if welcome_showing:
-                            QTimer.singleShot(0, lm._recreate_pdf_container)
+                            QTimer.singleShot(0, pm._show_pdf_welcome_tab)
                 else:
                     QMessageBox.warning(
                         self.main_window,
