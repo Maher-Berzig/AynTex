@@ -1507,77 +1507,63 @@ class LayoutManager:
 
 
     def toggle_pdf_layout(self):
-        """Toggle PDF layout between tabbed, horizontal, and vertical - FIXED"""
-        # Clean stale references and check if there are at least 2 PDF files open
+        """Cycle PDF layout: tabbed → horizontal → vertical → tabbed."""
         pdf_count = 0
         if hasattr(self.main_window.pdf_manager, 'pdf_files') and self.main_window.pdf_manager.pdf_files:
             pdf_count = self.main_window.pdf_manager._get_active_pdf_count()
-        
+
         if pdf_count < 2:
             from PyQt5.QtWidgets import QMessageBox
-            if pdf_count == 0:
-                message = "No PDF files are currently open.\n\nPlease open at least 2 PDF files to change the layout."
-            else:
-                message = "At least 2 PDF files must be opened to change the PDF layout.\n\nPlease open more PDF files to use horizontal or vertical layouts."
-            
-            QMessageBox.information(
-                self.main_window,
-                "Layout Toggle",
-                message
+            message = (
+                "No PDF files are currently open.\n\nPlease open at least 2 PDF files to change the layout."
+                if pdf_count == 0 else
+                "At least 2 PDF files must be opened to change the PDF layout.\n\nPlease open more PDF files to use horizontal or vertical layouts."
             )
+            QMessageBox.information(self.main_window, "Layout Toggle", message)
             return
-        
+
         modes = ["tabbed", "horizontal", "vertical"]
         current_mode = self.main_window.pdf_manager.pdf_layout_mode
         new_mode = modes[(modes.index(current_mode) + 1) % len(modes)]
-        
-        # Update manager mode
+        self._apply_pdf_layout(new_mode)
+
+    def _apply_pdf_layout(self, new_mode):
+        """Switch the PDF pane directly to *new_mode* (tabbed/horizontal/vertical).
+
+        Called by toggle_pdf_layout (cycle) and by context_menu._set_pdf_layout
+        (direct jump).  Keeping the transition logic here — in one place — means
+        the context menu never cycles through an intermediate mode, which was the
+        source of the brief floating-window flash.
+        """
         self.main_window.pdf_manager.pdf_layout_mode = new_mode
-        
-        # Save to config
         if hasattr(self.main_window, 'config_manager'):
             self.main_window.config_manager.set_config_value('layout', 'pdf_layout_mode', new_mode)
-        
-        # ✅ Detach tab context menu filters BEFORE destroying old widgets,
-        # so removeEventFilter() runs while the tab bars are still alive.
+
+        # Detach tab context menu filters BEFORE destroying old widgets
         if hasattr(self.main_window, 'tab_context_menu'):
             self.main_window.tab_context_menu.detach_pdf()
 
-        # ✅ FIX: Hide the entire pdf_container during transition to prevent flash
+        # Suppress repaints during the transition to avoid any flash
         self.pdf_container.setUpdatesEnabled(False)
-        
         try:
             pdf_layout = self.pdf_container.layout()
             if pdf_layout is None:
                 return
-            
-            # Remove and schedule deletion of old PDF widgets.
-            # Use pdf_manager._detach_and_destroy_widget so that any
-            # _TabBarFilter event filters are removed before the C++ objects
-            # are destroyed — preventing silent segfaults.
             while pdf_layout.count():
                 item = pdf_layout.takeAt(0)
                 w = item.widget() if item else None
                 if w:
                     self.main_window.pdf_manager._detach_and_destroy_widget(w)
-
-            # Clear PDF manager widget references
             self.main_window.pdf_manager.pdf_tabs = None
             self.main_window.pdf_manager.pdf_splitter = None
-            
-            # Recreate
             self._recreate_pdf_container()
-            
         finally:
-            # ✅ FIX: Re-enable updates after transition is complete
             self.pdf_container.setUpdatesEnabled(True)
             self.pdf_container.update()
 
-        # Reinstall filters on the new tab bars
         if hasattr(self.main_window, 'tab_context_menu'):
             self.main_window.tab_context_menu.reinstall_pdf()
-        
-        # Update status
+
         status_key = f"status_pdf_{new_mode}"
         self.main_window.update_status_bar(
             self.main_window.translations[self.main_window.menu_language][status_key]
