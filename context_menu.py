@@ -1330,10 +1330,10 @@ class TabContextMenu:
         lm = getattr(self.main_window, 'layout_manager', None)
         if not lm or pm.pdf_layout_mode == mode:
             return
-        for _ in range(3):
-            if pm.pdf_layout_mode == mode:
-                break
-            lm.toggle_pdf_layout()
+        # Jump directly to the requested mode — no cycling needed.
+        # _apply_pdf_layout handles the full transition in one shot,
+        # eliminating the intermediate-mode flash that toggle_pdf_layout caused.
+        lm._apply_pdf_layout(mode)
 
     def _rename_file(self, old_path, tab_widget, tab_index):
         from PyQt5.QtWidgets import QInputDialog, QMessageBox
