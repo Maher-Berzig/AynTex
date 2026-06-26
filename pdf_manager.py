@@ -1546,6 +1546,21 @@ class PDFManager:
             
         
    
+    def _detach_and_destroy_widget(self, widget):
+        """Orphan *widget* from its parent and schedule it for deletion.
+
+        Callers in layout_manager already call tab_context_menu.detach_pdf()
+        before invoking this, so event filters are already removed by the time
+        we arrive here.  This method exists as the single, safe destruction
+        point so both toggle_pdf_layout and _recreate_pdf_container go through
+        the same path.
+        """
+        if widget is None:
+            return
+        # Orphan from parent so Qt stops painting it, then queue C++ deletion.
+        widget.setParent(None)
+        widget.deleteLater()
+
     def close_pdf_tab(self, index, show_welcome=True):
         """Close PDF tab by index - FIXED: AI Assistant only closes on its own [X]"""
         if self.pdf_layout_mode == "tabbed":
