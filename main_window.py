@@ -344,15 +344,22 @@ class MainWindow(QMainWindow):
                     lambda: self._select_latex_environment('backward')
                 )
                 #print("Created Ctrl+Shift+Down shortcut")
+
+                # Cursor position history: Alt+Left (back) / Alt+Right (forward)
+                cursor_back_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
+                cursor_back_shortcut.activated.connect(self.editor_manager.navigate_cursor_back)
+
+                cursor_forward_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
+                cursor_forward_shortcut.activated.connect(self.editor_manager.navigate_cursor_forward)
         
 
-            # ✅ NEW: PDF navigation shortcuts (Alt+Left and Alt+Right)
+            
             # Navigate back in PDF link history
-            pdf_back_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
+            pdf_back_shortcut = QShortcut(QKeySequence("Alt+Shift+Left"), self)
             pdf_back_shortcut.activated.connect(self._pdf_navigate_back)
             
             # Navigate forward in PDF link history
-            pdf_forward_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
+            pdf_forward_shortcut = QShortcut(QKeySequence("Alt+Shift+Right"), self)
             pdf_forward_shortcut.activated.connect(self._pdf_navigate_forward)
             
             # Side panel shortcuts (Ctrl+1..Ctrl+9, Ctrl+0)
