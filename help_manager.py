@@ -137,6 +137,8 @@ class ShortcutsDialog(QDialog):
                 (tr["jump"], "F7"),
                 (tr["select_from_begin"], "Ctrl+Shift+Up"),
                 (tr["select_from_end"], "Ctrl+Shift+Down"),
+                (tr["cursor_history_navigating"], "Alt+Left/Right"),
+                (tr["navigate_in_pdf_link_history"], "Alt+Shift+Left/Right"),
             ],
             
             tr["tools"]: [
