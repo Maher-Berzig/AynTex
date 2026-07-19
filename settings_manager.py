@@ -25,78 +25,16 @@ from cwl_manager import CWLManager
 from completion_settings_widget import CompletionSettingsWidget
 from toolbar_manager import DocumentTreeWidget
 
-# class DraggableButtonRow(QFrame):
-    # """A draggable row representing a side panel button configuration"""
-    # orderChanged = pyqtSignal()
 
-    # def __init__(self, index, label_text="", latex_text="", shortcut_text="", parent=None):
-        # super().__init__(parent)
-        # self.index = index
-        # self.parent_widget = parent
-        # self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        # self.setAcceptDrops(True)
-        # self.setMinimumHeight(95)
-
-        # layout = QHBoxLayout(self)
-        # layout.setContentsMargins(5, 5, 5, 5)
-
-        # # Drag handle
-        # self.drag_handle = QLabel("⋮⋮")
-        # self.drag_handle.setFixedWidth(20)                                                      
-        # self.drag_handle.setCursor(Qt.OpenHandCursor)
-        # layout.addWidget(self.drag_handle)
-
-        # # Index label
-        # self.index_label = QLabel(f"{index + 1}.")
-        # self.index_label.setFixedWidth(25)
-        # layout.addWidget(self.index_label)
-
-        # # Input fields container
-        # fields_layout = QVBoxLayout()
-
-        # # Label input             
-        # label_row = QHBoxLayout()
-        # label_row.addWidget(QLabel("Label:"))
-        # self.label_field = QLineEdit(label_text)
-        # self.label_field.setPlaceholderText("Button text")
-        # self.label_field.setMaxLength(10)
-        # label_row.addWidget(self.label_field)
-        # fields_layout.addLayout(label_row)
-
-        # # LaTeX input
-        # latex_row = QHBoxLayout()
-        # latex_row.addWidget(QLabel("LaTeX:"))
-        # self.latex_field = QLineEdit(latex_text)
-        # self.latex_field.setPlaceholderText("LaTeX command (use 'cursor' for cursor position)")
-        # latex_row.addWidget(self.latex_field)
-        # fields_layout.addLayout(latex_row)
-
-        # layout.addLayout(fields_layout, stretch=1)
-
-        # # After the latex_row block, add:
-        # shortcut_row = QHBoxLayout()
-        # sc_label = QLabel("Shortcut:")
-        # sc_label.setFixedWidth(55)
-        # shortcut_row.addWidget(sc_label)
-        # self.shortcut_field = QLineEdit(shortcut_text)
-        # self.shortcut_field.setPlaceholderText("e.g. Ctrl+Shift+B  (optional)")
-        # self.shortcut_field.setMaxLength(25)
-        # shortcut_row.addWidget(self.shortcut_field)
-        # fields_layout.addLayout(shortcut_row)
-
-
-        # # ✅ Apply theme-aware styles on construction
-        # self.refresh_theme()
-
-        # self._drag_start_pos = None
 class DraggableButtonRow(QFrame):
     orderChanged = pyqtSignal()
 
-    def __init__(self, index, label_text="", latex_text="", shortcut_text="", parent=None, tr=None):
+    def __init__(self, index, label_text="", latex_text="", shortcut_text="", parent=None, tr=None, default_shortcut_hint=""):
         super().__init__(parent)
         self.index = index
         self.parent_widget = parent
         self.tr = tr if tr is not None else {}
+        self.default_shortcut_hint = default_shortcut_hint
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         self.setAcceptDrops(True)
         self.setMinimumHeight(95)
@@ -138,7 +76,12 @@ class DraggableButtonRow(QFrame):
         sc_label.setFixedWidth(55)
         shortcut_row.addWidget(sc_label)
         self.shortcut_field = QLineEdit(shortcut_text)
-        self.shortcut_field.setPlaceholderText(self.tr.get("sidepanel_shortcut_placeholder", "e.g. Ctrl+Shift+B  (optional)"))
+        # If this button already has an effective shortcut even without a
+        # custom one set (Ctrl+1..Ctrl+0 for the first ten, Ctrl+Space
+        # quick-jump for the rest), show that as the placeholder instead of
+        # the generic hint, so it's clear what already works.
+        placeholder = self.default_shortcut_hint or self.tr.get("sidepanel_shortcut_placeholder", "e.g. Ctrl+Shift+B  (optional)")
+        self.shortcut_field.setPlaceholderText(placeholder)
         self.shortcut_field.setMaxLength(25)
         shortcut_row.addWidget(self.shortcut_field)
         fields_layout.addLayout(shortcut_row)
@@ -269,100 +212,6 @@ class DraggableButtonRow(QFrame):
                                 
         event.acceptProposedAction()
 
-
-# class SidePanelSettingsWidget(QWidget):
-    # """Widget for managing side panel button configurations"""
-    # commandsChanged = pyqtSignal(list)
-    
-    # def __init__(self, main_window, parent=None):
-        # super().__init__(parent)
-
-        # self.main_window = main_window
-        # self.rows = []
-        # self._setup_ui()
-        # self._load_commands()
-        # self.refresh_theme() 
-    
-    # def _setup_ui(self):
-        # layout = QVBoxLayout(self)
-        
-        # # Header
-        # header_label = QLabel("Customize Side Panel Buttons (up to 100):")
-        # header_label.setStyleSheet("font-weight: bold; font-size: 12px;")
-        # layout.addWidget(header_label)
-        
-        # # Add/Remove buttons row
-        # button_row = QHBoxLayout()
-        
-        # self.add_button = QPushButton("+ Add Button")
-        # self.add_button.setToolTip("Add a new button (max 100)")
-        # self.add_button.clicked.connect(self.add_new_button)
-        # button_row.addWidget(self.add_button)
-        
-        # self.remove_button = QPushButton("- Remove Last")
-        # self.remove_button.setToolTip("Remove the last button (cannot remove first 17)")
-        # self.remove_button.clicked.connect(self.remove_last_button)
-        # button_row.addWidget(self.remove_button)
-        
-        # self.button_count_label = QLabel("Buttons: 17")
-        # button_row.addWidget(self.button_count_label)
-        
-        # button_row.addStretch()
-        # layout.addLayout(button_row)
-        
-        # # Scrollable area for button configurations
-        # self.scroll = QScrollArea()
-        # self.scroll.setWidgetResizable(True)
-        # self.scroll.setMinimumHeight(400)
-        
-        # self.scroll_widget = QWidget()
-        # self.scroll_layout = QVBoxLayout(self.scroll_widget)
-        # self.scroll_layout.setSpacing(5)
-        # self.scroll_layout.setContentsMargins(5, 5, 5, 5)
-        
-        # self.scroll.setWidget(self.scroll_widget)
-        # layout.addWidget(self.scroll, stretch=1)
-        
-        # # Action buttons
-        # action_row = QHBoxLayout()
-        
-        # default_button = QPushButton("Reset to Default")
-        # default_button.setToolTip("Reset all buttons to default LaTeX commands")
-        # default_button.clicked.connect(self.reset_to_default)
-        # action_row.addWidget(default_button)
-        
-        # preview_button = QPushButton("Preview Commands")
-        # preview_button.setToolTip("Preview how the commands will look")
-        # preview_button.clicked.connect(self.preview_commands)
-        # action_row.addWidget(preview_button)
-        
-        # action_row.addStretch()
-        # layout.addLayout(action_row)
-        
-        # # Help text
-        # help_text = QLabel(
-            # "💡 Tips:\n"
-            # "• Drag ⋮⋮ handle to reorder buttons\n"
-            # "• Use 'cursor' to mark cursor position\n"
-            # "• Use '\\n' in the LaTeX field to insert line breaks (will be converted to real newlines)\n"
-            # "• Leave fields empty to hide the button\n"
-            # "• First 17 buttons cannot be removed (but can be emptied)\n"
-            # "• Keep labels short (10 chars max)\n\n"
-            # "📘 Example – Enumerated list with three items:\n"
-            # "   Label:   enum\n"
-            # "   LaTeX:   \\begin{enumerate}\\n\\item cursor\\n\\item\\n\\item\\n\\end{enumerate}\\n\n"
-            # "→ Result:\n"
-            # "   \\begin{enumerate}\n"
-            # "   \\item |\n"
-            # "   \\item\n"
-            # "   \\item\n"
-            # "   \\end{enumerate}\n"
-        # )        
-
-        # help_text.setStyleSheet("color: #666; font-size: 10px; padding: 5px;")
-        # help_text.setWordWrap(True)
-        # layout.addWidget(help_text)
-
 class SidePanelSettingsWidget(QWidget):
     commandsChanged = pyqtSignal(list)
 
@@ -433,6 +282,21 @@ class SidePanelSettingsWidget(QWidget):
 
     
 
+    def _default_shortcut_hint(self, active_idx):
+        """
+        The shortcut that already works for this button position even when
+        no custom shortcut is set: Ctrl+1..Ctrl+9, Ctrl+0 for the first ten
+        visible buttons (MainWindow.setup_keyboard_shortcuts), then
+        Ctrl+Space quick-jump for the rest (matches SidePanel's
+        _build_command_tooltip fallback and QuickJumpPopup._populate_list's
+        numbering).
+        """
+        if not active_idx:
+            return ""
+        if 1 <= active_idx <= 10:
+            return "Ctrl+0" if active_idx == 10 else f"Ctrl+{active_idx}"
+        return f"Ctrl+Space \u2192 {active_idx}"
+
     def _create_rows(self, commands):
         for row in self.rows:
             row.deleteLater()
@@ -441,14 +305,23 @@ class SidePanelSettingsWidget(QWidget):
         while len(commands) < self.main_window.side_panel.DEFAULT_BUTTON_COUNT:
             commands.append({"label": "", "latex": "", "shortcut": ""})
 
+        active_idx = 0  # position among rows with both label and latex set,
+                         # same order/filter as SidePanel._create_buttons
         for i, cmd in enumerate(commands):
+            if cmd.get("label", "").strip() and cmd.get("latex", "").strip():
+                active_idx += 1
+                hint = self._default_shortcut_hint(active_idx)
+            else:
+                hint = ""
+
             row = DraggableButtonRow(
                 i,
                 cmd.get("label", ""),
                 cmd.get("latex", ""),
                 cmd.get("shortcut", ""),
                 parent=self,
-                tr=self.tr
+                tr=self.tr,
+                default_shortcut_hint=hint
             )
             self.scroll_layout.addWidget(row)
             self.rows.append(row)
@@ -486,32 +359,6 @@ class SidePanelSettingsWidget(QWidget):
         commands = self.main_window.side_panel.commands
         self._create_rows(commands)
     
-    # def _create_rows(self, commands):
-        # """Create draggable rows for each command"""
-        # # Clear existing rows
-        # for row in self.rows:
-            # row.deleteLater()
-        # self.rows.clear()
-        
-        # # Ensure we have at least DEFAULT_BUTTON_COUNT rows
-        # while len(commands) < self.main_window.side_panel.DEFAULT_BUTTON_COUNT:
-            # commands.append({"label": "", "latex": ""})
-        
-        # # Create rows
-        # for i, cmd in enumerate(commands):
-            # row = DraggableButtonRow(
-                # i, 
-                # cmd.get("label", ""), 
-                # cmd.get("latex", ""),
-                # cmd.get("shortcut", ""),
-                # parent=self
-            # )
-            # self.scroll_layout.addWidget(row)
-            # self.rows.append(row)
-        
-        # self.scroll_layout.addStretch()
-        # self._update_button_count()
-        # self._update_remove_button_state()
     
     def _update_button_count(self):
         """Update the button count label"""
@@ -741,62 +588,6 @@ class SettingsDialog(QDialog):
         self.setup_ui()
         
 
-
-    # def setup_ui(self):
-        # layout = QVBoxLayout(self)
-        # self.tab_widget = QTabWidget()
-        # self._tabs_initialized = set()
-
-        # self._tab_loaders = {
-            # "Fonts":        self._load_font_settings,
-            # "Compiler":     self._load_compiler_settings,
-            # "Layout":       self._load_layout_settings,
-            # "UI":           self._load_ui_settings,
-            # "Side Panel":   lambda: None,
-            # "Colors":       self.load_color_settings,
-            # "Completion":   self.load_completion_settings,
-            # "AI Assistant": self._load_ai_settings,
-        # }
-
-        # tab_configs = [
-            # ("Fonts",       self.create_font_tab),
-            # ("Compiler",    self.create_compiler_tab),
-            # ("Layout",      self.create_layout_tab),
-            # ("UI",          self.create_ui_tab),
-            # ("Side Panel",  self.create_side_panel_tab),
-            # ("Colors",      self.create_color_tab),
-            # ("Completion",  self.create_completion_tab),
-            # ("AI Assistant",self.create_ai_tab),
-        # ]
-
-        # self._tab_builders = {}
-        # for label, builder in tab_configs:
-            # placeholder = QWidget()
-            # self.tab_widget.addTab(placeholder, label)
-            # self._tab_builders[label] = builder
-
-        # self.tab_widget.currentChanged.connect(self._on_tab_selected)
-        # layout.addWidget(self.tab_widget)
-
-
-        # # Buttons
-        # button_layout = QHBoxLayout()
-        # self.ok_button = QPushButton("OK")
-        # self.ok_button.clicked.connect(self.accept)
-        # self.cancel_button = QPushButton("Cancel")
-        # self.cancel_button.clicked.connect(self.reject)
-        # self.apply_button = QPushButton("Apply")
-        # self.apply_button.clicked.connect(self.apply_settings)
-        # button_layout.addStretch()
-        # button_layout.addWidget(self.ok_button)
-        # button_layout.addWidget(self.cancel_button)
-        # button_layout.addWidget(self.apply_button)
-        # layout.addLayout(button_layout)
-
-        # # ← Defer first tab build until after the dialog is painted
-        # from PyQt5.QtCore import QTimer
-        # QTimer.singleShot(0, lambda: self._build_tab(0))
-
     def setup_ui(self):
         layout = QVBoxLayout(self)
         self.tab_widget = QTabWidget()
@@ -989,167 +780,6 @@ class SettingsDialog(QDialog):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         return scroll
 
-###
-    # def create_ai_tab(self):
-        # """Create AI configuration tab with Fetch Models and Custom Provider support"""
-        # ai_tab = QWidget()
-        # layout = QVBoxLayout(ai_tab)
-        # layout.setContentsMargins(15, 15, 15, 15)
-        # layout.setSpacing(10)
-
-        # # Title
-        # title = QLabel("AI Assistant Configuration")
-        # title.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        # layout.addWidget(title)
-
-        # # Mode selection
-        # mode_group = QGroupBox("AI Mode")
-        # mode_layout = QVBoxLayout(mode_group)
-        # self.ai_mode_combo = QComboBox()
-        # self.ai_mode_combo.addItem("Offline (Rule-based, no internet)", "offline")
-        # self.ai_mode_combo.addItem("Online (AI-powered, requires internet)", "online")
-        # self.ai_mode_combo.currentIndexChanged.connect(self._on_ai_mode_changed)
-        # mode_layout.addWidget(self.ai_mode_combo)
-        # layout.addWidget(mode_group)
-
-        # # Online AI settings (initially hidden)
-        # self.online_ai_group = QGroupBox("Online AI Settings")
-        # online_layout = QFormLayout(self.online_ai_group)
-
-        # # Provider selection with Add Custom button
-        # provider_layout = QHBoxLayout()
-        # self.ai_provider_combo = QComboBox()
-        # self._populate_default_providers()
-        # self.ai_provider_combo.currentIndexChanged.connect(self._on_provider_changed)
-        # provider_layout.addWidget(self.ai_provider_combo, 1)
-
-        # add_provider_btn = QPushButton("➕ Add Provider")
-        # add_provider_btn.setMaximumWidth(120)
-        # add_provider_btn.setToolTip("Add a custom AI provider not in the list")
-        # add_provider_btn.clicked.connect(self._add_custom_provider)
-        # provider_layout.addWidget(add_provider_btn)
-
-        # online_layout.addRow("Provider:", provider_layout)
-
-        # # API Key
-        # self.ai_api_key = QLineEdit()
-        # self.ai_api_key.setEchoMode(QLineEdit.Password)
-        # self.ai_api_key.setPlaceholderText("Enter API key")
-        # online_layout.addRow("API Key:", self.ai_api_key)
-
-        # # Show/Hide API key button
-        # key_btn_layout = QHBoxLayout()
-        # self.show_key_btn = QPushButton("👁 Show")
-        # self.show_key_btn.setMaximumWidth(80)
-        # self.show_key_btn.clicked.connect(self._toggle_api_key_visibility)
-        # key_btn_layout.addWidget(self.show_key_btn)
-        # key_btn_layout.addStretch()
-        # online_layout.addRow("", key_btn_layout)
-
-        # # API Base URL (for custom providers)
-        # self.ai_base_url = QLineEdit()
-        # self.ai_base_url.setPlaceholderText("Custom API base URL (optional)")
-        # self.ai_base_url.setToolTip("Override the default API endpoint URL")
-        # online_layout.addRow("API Base URL:", self.ai_base_url)
-
-        # # Fetch Models button + Model selection
-        # model_layout = QHBoxLayout()
-        # self.ai_model_combo = QComboBox()
-        # self.ai_model_combo.setEditable(True)  # Allow manual model entry
-        # self.ai_model_combo.setToolTip("Select a model or type a custom model name")
-        # model_layout.addWidget(self.ai_model_combo, 1)
-
-        # fetch_models_btn = QPushButton("🔄 Fetch Models")
-        # fetch_models_btn.setMaximumWidth(120)
-        # fetch_models_btn.setToolTip("Download current list of available models from the AI provider")
-        # fetch_models_btn.clicked.connect(self._fetch_models)
-        # model_layout.addWidget(fetch_models_btn)
-
-        # online_layout.addRow("Model:", model_layout)
-
-        # # Test connection button
-        # test_btn = QPushButton("🔗 Test Connection")
-        # test_btn.clicked.connect(self._test_ai_connection)
-        # online_layout.addRow("", test_btn)
-
-        # # Status label
-        # self.ai_status_label = QLabel("Not configured")
-        # self.ai_status_label.setStyleSheet("color: #666; padding: 5px;")
-        # online_layout.addRow("Status:", self.ai_status_label)
-
-        # layout.addWidget(self.online_ai_group)
-
-        # # AI Assistant Setup group - for manual/custom setup
-        # setup_group = QGroupBox("AI Assistant Setup (Manual)")
-        # setup_layout = QFormLayout(setup_group)
-
-        # setup_info = QLabel(
-            # "Use this section to manually configure a custom AI provider\n"
-            # "that is not in the predefined list above."
-        # )
-        # setup_info.setWordWrap(True)
-        # setup_info.setStyleSheet("color: #555; font-style: italic; padding: 5px;")
-        # setup_layout.addRow(setup_info)
-
-        # self.custom_provider_name = QLineEdit()
-        # self.custom_provider_name.setPlaceholderText("e.g., My Local LLM")
-        # setup_layout.addRow("Provider Name:", self.custom_provider_name)
-
-        # self.custom_api_url = QLineEdit()
-        # self.custom_api_url.setPlaceholderText("e.g., http://localhost:11434/v1/chat/completions")
-        # setup_layout.addRow("API Endpoint:", self.custom_api_url)
-
-        # self.custom_api_key = QLineEdit()
-        # self.custom_api_key.setEchoMode(QLineEdit.Password)
-        # self.custom_api_key.setPlaceholderText("API key (if required)")
-        # setup_layout.addRow("API Key:", self.custom_api_key)
-
-        # self.custom_model_name = QLineEdit()
-        # self.custom_model_name.setPlaceholderText("e.g., llama3, mistral, etc.")
-        # setup_layout.addRow("Model Name:", self.custom_model_name)
-
-        # add_custom_btn = QPushButton("➕ Add as New Provider")
-        # add_custom_btn.setStyleSheet("""
-            # QPushButton {
-                # background-color: #4caf50; color: white;
-                # border: none; border-radius: 4px; padding: 8px 16px;
-            # }
-            # QPushButton:hover { background-color: #45a049; }
-        # """)
-        # add_custom_btn.clicked.connect(self._add_manual_provider)
-        # setup_layout.addRow("", add_custom_btn)
-
-        # layout.addWidget(setup_group)
-
-        # # Info section
-        # info_group = QGroupBox("ℹ Information")
-        # info_layout = QVBoxLayout(info_group)
-        # info_text = QLabel(
-            # "<b>Get API Keys:</b><br>"
-            # "• Groq (Free): <a href='https://console.groq.com'>console.groq.com</a><br>"
-            # "• Qwen: <a href='https://dashscope.console.aliyun.com'>dashscope.console.aliyun.com</a><br>"
-            # "• DeepSeek: <a href='https://platform.deepseek.com'>platform.deepseek.com</a><br>"
-            # "• OpenAI: <a href='https://platform.openai.com/api-keys'>platform.openai.com</a><br>"
-            # "• HuggingFace: <a href='https://huggingface.co/settings/tokens'>huggingface.co/settings/tokens</a><br>"
-            # "• Anthropic: <a href='https://console.anthropic.com'>console.anthropic.com</a><br>"
-            # "• Google Gemini: <a href='https://aistudio.google.com/app/apikey'>aistudio.google.com</a><br>"
-            # "• Mistral: <a href='https://console.mistral.ai'>console.mistral.ai</a><br>"
-            # "• Cohere: <a href='https://dashboard.cohere.com/api-keys'>dashboard.cohere.com</a>"
-        # )
-        # info_text.setWordWrap(True)
-        # info_text.setOpenExternalLinks(True)
-        # self._apply_ai_info_style
-        # info_layout.addWidget(info_text)
-        # layout.addWidget(info_group)
-
-        # layout.addStretch()
-
-        # # Initially hide online settings
-        # self.online_ai_group.setVisible(False)
-
-        # scrollable = self._make_scrollable(ai_tab)
-        # #self.tab_widget.addTab(scrollable, "AI Assistant")
-        # return scrollable
 
     def create_ai_tab(self):
         lang = self.main_window.menu_language
@@ -1723,68 +1353,6 @@ class SettingsDialog(QDialog):
             self.ai_status_label.setText(f"❌ Error: {str(e)}")
             self.ai_status_label.setStyleSheet("color: #f44336;")
             QMessageBox.critical(self, "Error", str(e))
-###
-    # Add this method to the SettingsDialog class
-    # def create_completion_tab(self):
-        # """Create the CWL completion settings tab"""
-        # tab = QWidget()
-        # layout = QVBoxLayout(tab)
-        # layout.setContentsMargins(10, 10, 10, 10)
-        
-        # # Header
-        # header = QLabel("<b>LaTeX Autocompletion Settings</b>")
-        # header.setStyleSheet("font-size: 12px; padding: 5px;")
-        # layout.addWidget(header)
-        
-        # # General completion settings group
-        # general_group = QGroupBox("General Settings")
-        # general_layout = QGridLayout(general_group)
-        
-        # # Enable completion checkbox
-        # self.completion_enabled_check = QCheckBox("Enable LaTeX autocompletion")
-        # self.completion_enabled_check.setChecked(True)
-        # self.completion_enabled_check.setToolTip("Enable or disable autocompletion globally")
-        # general_layout.addWidget(self.completion_enabled_check, 0, 0, 1, 2)
-        
-        # # Fuzzy matching checkbox
-        # self.fuzzy_matching_check = QCheckBox("Enable fuzzy matching (VS Code style)")
-        # self.fuzzy_matching_check.setChecked(True)
-        # self.fuzzy_matching_check.setToolTip("Allow partial matches like 'frc' matching '\\frac'")
-        # general_layout.addWidget(self.fuzzy_matching_check, 1, 0, 1, 2)
-        
-        # # Minimum prefix length
-        # prefix_label = QLabel("Minimum prefix length:")
-        # self.min_prefix_spin = QSpinBox()
-        # self.min_prefix_spin.setRange(1, 5)
-        # self.min_prefix_spin.setValue(2)
-        # self.min_prefix_spin.setToolTip("Number of characters after \\ before showing completions")
-        # general_layout.addWidget(prefix_label, 2, 0)
-        # general_layout.addWidget(self.min_prefix_spin, 2, 1)
-        
-        # # Show mode indicators
-        # self.show_mode_indicators_check = QCheckBox("Show mode indicators ([m] for math, [t] for text)")
-        # self.show_mode_indicators_check.setChecked(True)
-        # general_layout.addWidget(self.show_mode_indicators_check, 3, 0, 1, 2)
-        
-        # # Auto-enable includes
-        # self.auto_enable_includes_check = QCheckBox("Automatically enable #include dependencies")
-        # self.auto_enable_includes_check.setChecked(True)
-        # self.auto_enable_includes_check.setToolTip("When enabling a .cwl file, also enable files it includes")
-        # general_layout.addWidget(self.auto_enable_includes_check, 4, 0, 1, 2)
-        
-        # layout.addWidget(general_group)
-        
-        # # CWL Files selection group
-        # files_group = QGroupBox("Completion Files (.cwl)")
-        # files_layout = QVBoxLayout(files_group)
-        
-        # # Defer the heavy CWL widget until needed
-        # self._cwl_widget_placeholder = layout
-        # QTimer.singleShot(0, self._load_cwl_widget)
-        
-        # scrollable = self._make_scrollable(tab)
-        # #self.tab_widget.addTab(scrollable, "Completion")  
-        # return scrollable           
 
     def create_completion_tab(self):
         lang = self.main_window.menu_language
@@ -2013,83 +1581,6 @@ class SettingsDialog(QDialog):
                         editor.latex_completer.set_min_prefix_length(min_prefix)
                         editor.latex_completer.refresh()
                     
-###
-    # def create_color_tab(self):
-        # """Create the syntax highlighting color settings tab"""
-        # color_tab = QWidget()
-        # layout = QVBoxLayout(color_tab)
-        # desc_label = QLabel("Customize LaTeX syntax highlighting colors:")
-        # desc_label.setWordWrap(True)
-        # layout.addWidget(desc_label)
-
-        # scroll = QScrollArea()
-        # scroll.setWidgetResizable(True)
-        # scroll_widget = QWidget()
-        # scroll_layout = QFormLayout(scroll_widget)
-
-        # color_categories = [
-            # ("command", "Commands (\\section, \\textbf, etc.)", QColor(0, 0, 139)),
-            # ("environment", "Environments (\\begin{}, \\end{})", QColor(139, 0, 139)),
-            # ("inline_math", "Inline Math ($...$)", QColor(0, 100, 0)),
-            # ("display_math", "Display Math (\\[...\\], $$...$$)", QColor(0, 128, 0)),
-            # ("brace", "Braces and Brackets ({}, [])", QColor(139, 0, 0)),
-            # ("paren",       "Parentheses (())",  QColor(70, 200, 200)),  # ← add this            
-            # ("parameter", "Parameters ({content})", QColor(255, 140, 0)),
-            # ("optional", "Optional Parameters ([content])", QColor(184, 134, 11)),
-            # ("comment", "Comments (% ...)", QColor(128, 128, 128)),
-            # ("special", "Special Characters (\\&, \\$, etc.)", QColor(128, 0, 128)),
-            # ("reference", "Labels & References (\\ref, \\cite)", QColor(25, 25, 112)),
-        # ]
-
-        # bg_categories = [
-            # ("inline_math_bg", "Inline Math Background", QColor(0, 0, 0, 0)),
-            # ("display_math_bg", "Display Math Background", QColor(0, 0, 0, 0)),
-        # ]
-
-        # for key, label, default_color in color_categories:
-            # color_button = QPushButton()
-            # color_button.setFixedSize(100, 30)
-            # # Remove the plain setStyleSheet – the _apply_color_button_style will handle it
-            # self._apply_color_button_style(color_button, default_color)
-
-            # self.color_widgets[key] = {
-                # 'button': color_button,
-                # 'color': default_color,
-                # 'type': 'foreground'
-            # }
-            # # ✅ Connect button to open color dialog
-            # color_button.clicked.connect(lambda checked, k=key, btn=color_button: self.choose_color(k, btn))
-            # scroll_layout.addRow(label + ":", color_button)
-
-        # separator = QFrame()
-        # separator.setFrameShape(QFrame.HLine)
-        # scroll_layout.addRow(separator)
-
-        # for key, label, default_color in bg_categories:
-            # color_button = QPushButton()
-            # color_button.setFixedSize(100, 30)
-            # self._apply_color_button_style(color_button, default_color)
-            # self.color_widgets[key] = {
-                # 'button': color_button,
-                # 'color': default_color,
-                # 'type': 'background'
-            # }
-            # color_button.clicked.connect(lambda checked, k=key, btn=color_button: self.choose_color(k, btn))
-            # scroll_layout.addRow(label + ":", color_button)
-
-        # scroll.setWidget(scroll_widget)
-        # layout.addWidget(scroll)
-
-        # reset_layout = QHBoxLayout()
-        # reset_button = QPushButton("Reset to Defaults")
-        # reset_button.clicked.connect(self.reset_colors_to_default)
-        # reset_layout.addStretch()
-        # reset_layout.addWidget(reset_button)
-        # layout.addLayout(reset_layout)
-
-        # scrollable = self._make_scrollable(color_tab)
-        # #self.tab_widget.addTab(scrollable, "Colors")
-        # return scrollable  
 
     def create_color_tab(self):
         lang = self.main_window.menu_language
@@ -2366,120 +1857,6 @@ class SettingsDialog(QDialog):
         self._apply_colors_to_highlighters_directly(color_map)
         
         
-###
-
-    # def create_font_tab(self):
-        # """Create font settings tab with reset buttons"""
-        # tab = QWidget()
-        # layout = QVBoxLayout(tab)
-
-        # # Define default values as class attributes for easy access
-        # self.default_editor_font_family = "Consolas"
-        # self.default_editor_font_size = 11
-        # self.default_ui_font_family = "Calibri"
-        # self.default_ui_font_size = 9
-
-        # # ========== Editor Font Settings ==========
-        # editor_group = QGroupBox("Editor Font")
-        # editor_layout = QGridLayout(editor_group)
-
-        # # Editor Font Family
-        # editor_font_label = QLabel("Font Family:")
-        # self.editor_font_combo = QFontComboBox()
-        # self.editor_font_combo.setToolTip("Choose font for the code editor")
-        # editor_layout.addWidget(editor_font_label, 0, 0)
-        # editor_layout.addWidget(self.editor_font_combo, 0, 1)
-
-        # # Only monospace checkbox for editor
-        # self.monospace_only = QCheckBox("Show only monospace fonts")
-        # self.monospace_only.setChecked(True)
-        # self.monospace_only.toggled.connect(self.filter_editor_fonts)
-        # editor_layout.addWidget(self.monospace_only, 1, 0, 1, 2)
-
-        # # Editor Font Size
-        # editor_size_label = QLabel("Font Size:")
-        # self.editor_font_spin = QSpinBox()
-        # self.editor_font_spin.setRange(8, 24)
-        # self.editor_font_spin.setToolTip("Size of the editor font")
-        # editor_layout.addWidget(editor_size_label, 2, 0)
-        # editor_layout.addWidget(self.editor_font_spin, 2, 1)
-
-        # # Reset Editor Font Button
-        # self.reset_editor_font_btn = QPushButton("Reset to Default")
-        # self.reset_editor_font_btn.setToolTip(f"Reset to {self.default_editor_font_family}, size {self.default_editor_font_size}")
-        # self.reset_editor_font_btn.clicked.connect(self.reset_editor_font)
-        # editor_layout.addWidget(self.reset_editor_font_btn, 3, 0, 1, 2, Qt.AlignRight)
-
-        # layout.addWidget(editor_group)
-
-        # # ========== Interface Font Settings ==========
-        # ui_group = QGroupBox("Interface Font")
-        # ui_layout = QGridLayout(ui_group)
-
-        # # UI Font Family
-        # ui_font_label = QLabel("Font Family:")
-        # self.ui_font_combo = QFontComboBox()
-        # self.ui_font_combo.setToolTip("Choose font for menus and UI elements")
-        # ui_layout.addWidget(ui_font_label, 0, 0)
-        # ui_layout.addWidget(self.ui_font_combo, 0, 1)
-
-        # # UI Font Size
-        # ui_size_label = QLabel("Font Size:")
-        # self.toolbar_font_spin = QSpinBox()
-        # self.toolbar_font_spin.setRange(8, 18)
-        # self.toolbar_font_spin.setToolTip("Size of toolbar and UI fonts")
-        # ui_layout.addWidget(ui_size_label, 1, 0)
-        # ui_layout.addWidget(self.toolbar_font_spin, 1, 1)
-
-        # # Reset UI Font Button
-        # self.reset_ui_font_btn = QPushButton("Reset to Default")
-        # self.reset_ui_font_btn.setToolTip(f"Reset to {self.default_ui_font_family}, size {self.default_ui_font_size}")
-        # self.reset_ui_font_btn.clicked.connect(self.reset_ui_font)
-        # ui_layout.addWidget(self.reset_ui_font_btn, 2, 0, 1, 2, Qt.AlignRight)
-
-        # layout.addWidget(ui_group)
-
-        # # ========== Preview and Reset All Buttons ==========
-        # buttons_layout = QHBoxLayout()
-        # buttons_layout.addStretch()
-
-        # # Preview Fonts Button
-        # self.preview_button = QPushButton("Preview Fonts")
-        # self.preview_button.clicked.connect(self.preview_fonts)
-        # self.preview_button.setFixedWidth(150)
-        # buttons_layout.addWidget(self.preview_button)
-
-        # # Reset All Fonts Button
-        # self.reset_all_fonts_btn = QPushButton("Reset All Fonts")
-        # self.reset_all_fonts_btn.setToolTip("Reset all font settings to default values")
-        # self.reset_all_fonts_btn.clicked.connect(self.reset_all_fonts)
-        # self.reset_all_fonts_btn.setFixedWidth(150)
-        # buttons_layout.addWidget(self.reset_all_fonts_btn)
-
-        # buttons_layout.addStretch()
-        # layout.addLayout(buttons_layout)
-
-        # # ========== Font Recommendations ==========
-        # self.font_recommendations = QLabel()
-        # self.font_recommendations.setWordWrap(True)
-        # self.font_recommendations.setStyleSheet(
-            # "color: #666; font-size: 11px; padding: 10px; "
-            # "border: 1px solid #ddd; border-radius: 4px;"
-        # )
-        # layout.addWidget(self.font_recommendations)
-
-        # # Connect signals to update recommendations
-        # self.editor_font_combo.currentFontChanged.connect(self.update_font_recommendations)
-        # self.ui_font_combo.currentFontChanged.connect(self.update_font_recommendations)
-
-        # layout.addStretch()
-        # scrollable = self._make_scrollable(tab)
-        # self.tab_widget.addTab(scrollable, "Fonts")
-
-        # # Initial font filtering
-        # self.filter_editor_fonts()
-        # return scrollable
-        
     def create_font_tab(self):
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
@@ -2744,112 +2121,6 @@ Status text: Ready | Editor Layout | No files | LTR | English""")
         
         preview_dialog.exec_()
         
-    # def create_compiler_tab(self):
-        # """Create compiler settings tab with customizable command options"""
-        # tab = QWidget()
-        # layout = QVBoxLayout(tab)
-        
-        # # LaTeX Compiler Group (existing code)
-        # latex_group = QGroupBox("LaTeX Compiler")
-        # latex_layout = QGridLayout(latex_group)
-        
-        # engine_label = QLabel("LaTeX Engine:")
-        # self.engine_combo = QComboBox()
-        # self.engine_combo.addItems(["pdflatex", "xelatex", "lualatex", "custom"])
-        # self.engine_combo.currentTextChanged.connect(self.on_latex_engine_changed)
-        
-        # latex_layout.addWidget(engine_label, 0, 0)
-        # latex_layout.addWidget(self.engine_combo, 0, 1)
-        
-        # command_label = QLabel("Compilation Command:")
-        # self.command_text = QLineEdit()
-        # self.command_text.setPlaceholderText("Enter custom compilation command...")
-        
-        # latex_layout.addWidget(command_label, 1, 0)
-        # latex_layout.addWidget(self.command_text, 1, 1)
-        
-        # # Help label for LaTeX custom commands
-        # self.custom_help_label = QLabel(
-            # "For custom commands, use full command chains. Available placeholders:\n"
-            # "• %f = full filename (e.g., document.tex)\n"
-            # "• %b = basename without extension (e.g., document)\n" 
-            # "• %d = directory path\n\n"
-            # "Examples:\n"
-            # "• latex %f && dvips %b.dvi && ps2pdf %b.ps\n"
-            # "• pdflatex %f && bibtex %b && pdflatex %f && pdflatex %f"
-        # )
-        # self.custom_help_label.setStyleSheet("color: #666; font-size: 10px; background-color: #f5f5f5; padding: 8px; border: 1px solid #ddd; border-radius: 4px;")
-        # self.custom_help_label.setWordWrap(True)
-        # self.custom_help_label.setVisible(False)
-        
-        # latex_layout.addWidget(self.custom_help_label, 2, 0, 1, 2)
-        
-        # self.reset_latex_button = QPushButton("Reset to Default")
-        # self.reset_latex_button.clicked.connect(self.reset_latex_command)
-        # latex_layout.addWidget(self.reset_latex_button, 3, 1, Qt.AlignRight)
-        
-        # layout.addWidget(latex_group)
-        
-        # # Enhanced Backmatter Compiler Group with custom support
-        # backmatter_group = QGroupBox("Backmatter Compiler")
-        # backmatter_layout = QGridLayout(backmatter_group)
-        
-        # backmatter_label = QLabel("Backmatter Engine:")
-        # self.backmatter_combo = QComboBox()
-        # # Extended list with more options including custom
-        # self.backmatter_combo.addItems(["bibtex", "biber", "makeindex", "xindy", "makeglossaries", "custom"])
-        # self.backmatter_combo.currentTextChanged.connect(self.on_backmatter_engine_changed)
-        
-        # backmatter_layout.addWidget(backmatter_label, 0, 0)
-        # backmatter_layout.addWidget(self.backmatter_combo, 0, 1)
-        
-        # backmatter_command_label = QLabel("Backmatter Command:")
-        # self.backmatter_command_text = QLineEdit()
-        # self.backmatter_command_text.setPlaceholderText("Enter custom backmatter command...")
-        
-        # backmatter_layout.addWidget(backmatter_command_label, 1, 0)
-        # backmatter_layout.addWidget(self.backmatter_command_text, 1, 1)
-        
-        # # Help label for backmatter custom commands
-        # self.backmatter_custom_help_label = QLabel(
-            # "Custom backmatter commands support the same placeholders:\n"
-            # "• %f = full filename (e.g., document.tex)\n"
-            # "• %b = basename without extension (e.g., document)\n"
-            # "• %d = directory path\n\n"
-            # "Examples:\n"
-            # "• biber %b\n"
-            # "• xindy -M texindy -L english %b.idx\n"
-            # "• custom-bibliography-processor %b.aux"
-        # )
-        # self.backmatter_custom_help_label.setStyleSheet("color: #666; font-size: 10px; background-color: #f0f8ff; padding: 8px; border: 1px solid #cce7ff; border-radius: 4px;")
-        # self.backmatter_custom_help_label.setWordWrap(True)
-        # self.backmatter_custom_help_label.setVisible(False)
-        
-        # backmatter_layout.addWidget(self.backmatter_custom_help_label, 2, 0, 1, 2)
-        
-        # self.reset_backmatter_button = QPushButton("Reset to Default")
-        # self.reset_backmatter_button.clicked.connect(self.reset_backmatter_command)
-        # backmatter_layout.addWidget(self.reset_backmatter_button, 3, 1, Qt.AlignRight)
-        
-        # layout.addWidget(backmatter_group)
-        
-        # # Encoding group (existing code)
-        # encoding_group = QGroupBox("Output Encoding")
-        # encoding_layout = QGridLayout(encoding_group)
-        
-        # encoding_label = QLabel("Encoding:")
-        # self.encoding_combo = QComboBox()
-        # self.encoding_combo.addItems(["utf-8", "latin-1", "cp1252"])
-        
-        # encoding_layout.addWidget(encoding_label, 0, 0)
-        # encoding_layout.addWidget(self.encoding_combo, 0, 1)
-        
-        # layout.addWidget(encoding_group)
-        # layout.addStretch()
-        
-        # scrollable = self._make_scrollable(tab)
-        # #self.tab_widget.addTab(scrollable, "Compiler")
-        # return scrollable
 
     def create_compiler_tab(self):
         lang = self.main_window.menu_language
@@ -2864,12 +2135,7 @@ Status text: Ready | Editor Layout | No files | LTR | English""")
 
         engine_label = QLabel(tr.get("compiler_engine_label", "LaTeX Engine:"))
         self.engine_combo = QComboBox()
-        # self.engine_combo.addItems([
-            # tr.get("compiler_engine_pdflatex", "pdflatex"),
-            # tr.get("compiler_engine_xelatex", "xelatex"),
-            # tr.get("compiler_engine_lualatex", "lualatex"),
-            # tr.get("compiler_engine_custom", "custom")
-        # ])
+
         for key, label_key, default in [
             ("pdflatex", "compiler_engine_pdflatex", "pdflatex"),
             ("xelatex",  "compiler_engine_xelatex",  "xelatex"),
@@ -2907,14 +2173,7 @@ Status text: Ready | Editor Layout | No files | LTR | English""")
 
         backmatter_label = QLabel(tr.get("compiler_backmatter_label", "Backmatter Engine:"))
         self.backmatter_combo = QComboBox()
-        # self.backmatter_combo.addItems([
-            # tr.get("compiler_backmatter_bibtex", "bibtex"),
-            # tr.get("compiler_backmatter_biber", "biber"),
-            # tr.get("compiler_backmatter_makeindex", "makeindex"),
-            # tr.get("compiler_backmatter_xindy", "xindy"),
-            # tr.get("compiler_backmatter_makeglossaries", "makeglossaries"),
-            # tr.get("compiler_backmatter_custom", "custom")
-        # ])
+
         for key, label_key, default in [
             ("bibtex",          "compiler_backmatter_bibtex",          "bibtex"),
             ("biber",           "compiler_backmatter_biber",           "biber"),
@@ -3038,93 +2297,6 @@ Status text: Ready | Editor Layout | No files | LTR | English""")
         if current_engine in self.default_backmatter_commands:
             self.backmatter_command_text.setText(self.default_backmatter_commands[current_engine])
                 
-        
-    # def create_layout_tab(self):
-        # """Create layout settings tab"""
-        # tab = QWidget()
-        # layout = QVBoxLayout(tab)
-        
-        # # Main Layout Group
-        # main_group = QGroupBox("Main Layout")
-        # main_layout = QGridLayout(main_group)
-        
-        # # Switch Mode
-        # switch_label = QLabel("Default Position:")
-        # self.switch_combo = QComboBox()
-        # self.switch_combo.addItems(["editor_left", "pdf_left"])
-        # main_layout.addWidget(switch_label, 0, 0)
-        # main_layout.addWidget(self.switch_combo, 0, 1)
-        
-        # layout.addWidget(main_group)
-        
-        # # Set initial value
-        # current_layout = self.main_window.editor_manager.editor_layout_mode
-        # self.switch_combo.setCurrentText(current_layout)
-        
-        
-        # # Editor Layout Group
-        # editor_group = QGroupBox("Editor Layout")
-        # editor_layout = QGridLayout(editor_group)
-        
-        # editor_label = QLabel("Editor Mode:")
-        # self.editor_layout_combo = QComboBox()
-        # self.editor_layout_combo.addItems(["tabbed", "horizontal", "vertical"])
-        # editor_layout.addWidget(editor_label, 0, 0)
-        # editor_layout.addWidget(self.editor_layout_combo, 0, 1)
-        
-        # layout.addWidget(editor_group)
-        
-        # # Set initial value
-        # current_mode = self.main_window.editor_manager.editor_layout_mode
-        # self.editor_layout_combo.setCurrentText(current_mode)
-
-        
-        # # PDF Layout Group
-        # pdf_group = QGroupBox("PDF Layout")
-        # pdf_layout = QGridLayout(pdf_group)        
-        # pdf_label = QLabel("PDF Mode:")
-        # self.pdf_layout_combo = QComboBox()
-        # self.pdf_layout_combo.addItems(["tabbed", "horizontal", "vertical"])
-        # pdf_layout.addWidget(pdf_label, 0, 0)
-        # pdf_layout.addWidget(self.pdf_layout_combo, 0, 1)        
-        
-        # layout.addWidget(pdf_group)
-        
-        # current_mode = self.main_window.pdf_manager.pdf_layout_mode
-        # self.pdf_layout_combo.setCurrentText(current_mode)
-        
-        
-        # # Recent Files Group
-        # recent_group = QGroupBox("Recent Files")
-        # recent_layout = QVBoxLayout(recent_group)
-        
-        
-        # self.recent_list = QListWidget()
-        # self.recent_list.setMaximumHeight(200)
-        # recent_layout.addWidget(self.recent_list)
-        
-        # recent_files_btn_layout = QHBoxLayout()
-        # recent_layout.addLayout(recent_files_btn_layout)
-        
-        # clear_recent_btn = QPushButton("Clear Recent Files")
-        # clear_recent_btn.clicked.connect(self.clear_recent_files)
-        # clear_recent_btn.clicked.connect(self.main_window.editor_manager.close_all_files)
-        # clear_recent_btn.setFixedWidth(150)
-        # recent_files_btn_layout.addWidget(clear_recent_btn,alignment=Qt.AlignRight)
-        
-
-        # open_all_recent_btn = QPushButton("Open All Recent Files")
-        # open_all_recent_btn.clicked.connect(self.main_window.menu_manager.open_all_recent_files)
-        # open_all_recent_btn.setFixedWidth(150)
-        # recent_files_btn_layout.addWidget(open_all_recent_btn,alignment=Qt.AlignLeft)
-               
-        # layout.addWidget(recent_group)
-        
-        # layout.addStretch()
-        
-        # scrollable = self._make_scrollable(tab)
-        # #self.tab_widget.addTab(scrollable, "Layout")
-        # return scrollable   
 
     def create_layout_tab(self):
         lang = self.main_window.menu_language
@@ -3277,158 +2449,6 @@ Status text: Ready | Editor Layout | No files | LTR | English""")
             self._loading_settings = True
             self.output_visible_check.setChecked(self.main_window.output_tabs_visible)
             self._loading_settings = False
-    
-    # def create_ui_tab(self):
-        # """Create UI settings tab"""
-        # tab = QWidget()
-        # layout = QVBoxLayout(tab)
-        
-        # # Language & Startup Settings
-        # lang_group = QGroupBox("Language and Startup")
-        # lang_layout = QGridLayout(lang_group)
-        
-        # # Menu Language
-        # menu_lang_label = QLabel("Menu Language:")
-        # self.menu_lang_combo = QComboBox()
-        # self.menu_lang_combo.addItems(["en", "ar"])
-        # self.menu_lang_combo.currentTextChanged.connect(self.on_setting_changed)
-        # lang_layout.addWidget(menu_lang_label, 0, 0)
-        # lang_layout.addWidget(self.menu_lang_combo, 0, 1)
-        # current_menu_lang = self.main_window.menu_language
-        # self.menu_lang_combo.setCurrentText(current_menu_lang)
-        
-        # # RTL Support
-        # self.rtl_check = QCheckBox("Right-to-Left text direction")
-        # self.rtl_check.stateChanged.connect(self.on_setting_changed)
-        # lang_layout.addWidget(self.rtl_check, 1, 0, 1, 2)
-        # new_rtl = self.main_window.is_rtl
-        # self.rtl_check.setChecked(new_rtl)
-        
-        # # Auto-load setting
-        # self.auto_load_check = QCheckBox("Load last open files on startup")
-        # self.auto_load_check.stateChanged.connect(self.on_setting_changed)
-        # lang_layout.addWidget(self.auto_load_check, 2, 0, 1, 2)
-        
-        # layout.addWidget(lang_group)
-
-        # # ── Application Theme ─────────────────────────────────────────────────
-        # theme_group = QGroupBox("Application Theme")
-        # theme_layout = QGridLayout(theme_group)
-
-        # theme_label = QLabel("Theme:")
-        # self.theme_combo = QComboBox()
-
-        # # Populate from AVAILABLE_THEMES; mark qdarkstyle entries if missing
-        # from style_manager import AVAILABLE_THEMES
-        # try:
-            # import qdarkstyle
-            # _has_qdarkstyle = True
-        # except ImportError:
-            # _has_qdarkstyle = False
-
-        # self._theme_keys = []
-        # for key, display in AVAILABLE_THEMES.items():
-            # needs_pkg = key in ("dark", "light")
-            # if needs_pkg and not _has_qdarkstyle:
-                # self.theme_combo.addItem(f"{display}  (pip install qdarkstyle)")
-            # else:
-                # self.theme_combo.addItem(display)
-            # self._theme_keys.append(key)
-
-        # current_theme = getattr(self.main_window, 'app_theme', 'default')
-        # if current_theme in self._theme_keys:
-            # self.theme_combo.setCurrentIndex(self._theme_keys.index(current_theme))
-
-        # self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-
-        # theme_layout.addWidget(theme_label, 0, 0)
-        # theme_layout.addWidget(self.theme_combo, 0, 1)
-
-        # if not _has_qdarkstyle:
-            # hint = QLabel(
-                # "Install <b>qdarkstyle</b> to unlock Dark and Light themes: "
-                # "<code>pip install qdarkstyle</code>"
-            # )
-            # hint.setWordWrap(True)
-            # hint.setStyleSheet("color: gray; font-size: 11px;")
-            # theme_layout.addWidget(hint, 1, 0, 1, 2)
-
-        # layout.addWidget(theme_group)
-
-        # # ── rest of the method unchanged from here ────────────────────────────
-
-        
-        # # Output Tabs Group
-        # output_group = QGroupBox("Output Tabs Configuration")
-        # output_layout = QGridLayout(output_group)  # Use QGridLayout to match original
-        
-        # # Main output checkbox
-        # self.output_visible_check = QCheckBox("Show Output/Error tabs")
-        # self.output_visible_check.setToolTip("Main output container with Output and Error tabs")
-        # output_layout.addWidget(self.output_visible_check, 0, 0, 1, 2)  # Row 0, spans 2 columns
-        
-        # #self.output_visible_check.toggled.connect(self.main_window.set_output_visibility)
-        
-        # # Sub-tabs (dependent on main output)
-        # sub_tabs_label = QLabel("Additional tabs (require Output/Error to be visible):")
-        # sub_tabs_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-        # output_layout.addWidget(sub_tabs_label, 1, 0, 1, 2)  # Row 1, spans 2 columns
-        
-        # # Create sub-tab checkboxes with indentation using grid positions
-        # self.symbols_visible_check = QCheckBox("Show Symbols tab")
-        # self.commands_visible_check = QCheckBox("Show Commands tab")
-        # self.tree_visible_check = QCheckBox("Show Tree tab")
-        # self.bookmarks_visible_check = QCheckBox("Show Bookmarks tab")
-        # self.terminal_visible_check = QCheckBox("Show Terminal tab")
-        
-        # # Add checkboxes to grid with indentation (column 1 for indentation effect)
-        # output_layout.addWidget(self.symbols_visible_check, 2, 0)
-        # output_layout.addWidget(self.commands_visible_check, 3, 0)
-        # output_layout.addWidget(self.tree_visible_check, 4, 0)
-        # output_layout.addWidget(self.bookmarks_visible_check, 5, 0)
-        # output_layout.addWidget(self.terminal_visible_check, 6, 0)
-        
-        # # Add some spacing to the right column if needed
-        # output_layout.setColumnStretch(1, 1)
-        
-        # # Connect signals for synchronization
-        # self.output_visible_check.toggled.connect(self.on_output_toggled)
-        # self.symbols_visible_check.toggled.connect(self.on_sub_tab_toggled)
-        # self.commands_visible_check.toggled.connect(self.on_sub_tab_toggled)
-        # self.tree_visible_check.toggled.connect(self.on_sub_tab_toggled)
-        # self.bookmarks_visible_check.toggled.connect(self.on_sub_tab_toggled)
-        # self.terminal_visible_check.toggled.connect(self.on_sub_tab_toggled)
-        
-        # layout.addWidget(output_group)
-        
-
-
-        # # show_line_numbers and show_fold_markers
-        # line_fold_group = QGroupBox("Line numbers and fold markers")
-        # line_fold_layout = QGridLayout(line_fold_group)
-
-        # # Line numbers checkbox
-        # self.line_numbers_check = QCheckBox("Show line numbers")
-        # self.line_numbers_check.toggled.connect(self._on_line_numbers_toggled)
-        # line_fold_layout.addWidget(self.line_numbers_check, 0, 0, 1, 2)
-
-        # # Fold markers checkbox  
-        # self.fold_marker_check = QCheckBox("Show fold markers")
-        # self.fold_marker_check.toggled.connect(self._on_fold_markers_toggled)
-        # line_fold_layout.addWidget(self.fold_marker_check, 1, 0, 1, 2)
-
-        # layout.addWidget(line_fold_group)      
-        
-        # layout.addStretch()
-
-        
-        # # Add tab to tab widget
-        # if hasattr(self, 'tab_widget'):            
-            # scrollable = self._make_scrollable(tab)
-            # self.tab_widget.addTab(scrollable, "UI")
-
-        # return scrollable   
-
 
     def create_ui_tab(self):
         lang = self.main_window.menu_language
@@ -4037,20 +3057,6 @@ Status text: Ready | Editor Layout | No files | LTR | English""")
             import traceback
             traceback.print_exc()
 
-
-        
-    # def create_side_panel_tab(self):
-        # """Create the side panel configuration tab"""
-        # self.side_panel_widget = SidePanelSettingsWidget(self.main_window)
-        
-        # # Connect change signal to enable immediate apply
-        # self.side_panel_widget.commandsChanged.connect(self._on_side_panel_changed)
-        
-        # scrollable = self._make_scrollable(self.side_panel_widget)
-        # #self.tab_widget.addTab(scrollable, "Side Panel")
-
-        # return scrollable   
-        
     def create_side_panel_tab(self):
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
@@ -4952,27 +3958,6 @@ class SettingsManager:
             traceback.print_exc()
             return None
     
-    # def load_settings(self):
-        # """Load settings from configuration"""
-        # load_settings_from_config(self.main_window)
-    
-    # def apply_defaults(self):
-        # """Apply default settings"""
-        # apply_default_settings(self.main_window)
-    
-    # def create_shortcut(self):
-        # """Create keyboard shortcut for settings"""
-        # if hasattr(self.main_window, 'addAction'):
-            # from PyQt5.QtWidgets import QAction
-            # from PyQt5.QtGui import QKeySequence
-            
-            # settings_action = QAction("Settings", self.main_window)
-            # #settings_action.setShortcut(QKeySequence("Ctrl+,"))
-            # settings_action.triggered.connect(self.open_settings)
-            
-            # self.main_window.addAction(settings_action)
-            # return settings_action
-        # return None
     
     def get_current_font_settings(self):
         """Get current font settings as dict"""
@@ -4983,37 +3968,6 @@ class SettingsManager:
             'toolbar_font_size': getattr(self.main_window, 'toolbar_font_size', 10)
         }
     
-    # def validate_settings(self):
-        # """Validate current settings and fix any issues"""
-        # try:
-            # # Validate output_tabs_visible state
-            # if not hasattr(self.main_window, 'output_tabs_visible'):
-                # self.main_window.output_tabs_visible = True
-            
-            # # Validate language setting
-            # if not hasattr(self.main_window, 'menu_language'):
-                # self.main_window.menu_language = 'en'
-            # elif self.main_window.menu_language not in ['en', 'ar']:
-                # self.main_window.menu_language = 'en'
-            
-            # # Validate layout managers
-            # managers_to_check = [
-                # ('layout_manager', 'current_layout', 'editor_left'),
-                # ('editor_manager', 'editor_layout_mode', 'tabbed'),
-                # ('pdf_manager', 'pdf_layout_mode', 'tabbed')
-            # ]
-            
-            # for manager_name, attr_name, default_value in managers_to_check:
-                # if hasattr(self.main_window, manager_name):
-                    # manager = getattr(self.main_window, manager_name)
-                    # if not hasattr(manager, attr_name):
-                        # setattr(manager, attr_name, default_value)
-            
-            # print("Settings validation completed")
-            
-        # except Exception as e:
-            # print(f"Error validating settings: {e}")
-
 
     def open_settings_dialog(main_window):
         """Open settings dialog - standalone function for compatibility"""
