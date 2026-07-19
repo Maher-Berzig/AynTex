@@ -2084,7 +2084,7 @@ class MenuManager:
         current_file = self.main_window.editor_manager.get_current_file_path()
 
         if not current_editor or not current_file:
-            self.main_window.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+            self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
             return
 
         dialog = DoubleLanguagesInsertion(self.main_window, lang)
