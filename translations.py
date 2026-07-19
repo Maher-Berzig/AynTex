@@ -178,6 +178,8 @@ translations = {
         "jump": "Jump",
         "select_from_begin": "Select from begin",
         "select_from_end": "Select from end",
+        "cursor_history_navigating": "Cursor position history: forward/backward navigation",
+        "navigate_in_pdf_link_history": "Navigate forward/backward in the PDF link history",
         "full_screen": "Full Screen",
         "toggle_toolbar_text": "Show Toolbar Button Text",
         "toggle_tooltips": "Show Tooltips",
@@ -921,6 +923,8 @@ translations = {
         "show_pdf_toolbar": "إظهار شريط أدوات البدآف",
         "hide_side_panel": "أخفي عمود الأوامر",
         "show_side_panel": "أعرض عمود الأوامر",
+        "cursor_history_navigating": "سجل موضع المؤشر: التنقل للأمام/للخلف",
+        "navigate_in_pdf_link_history": "التنقل للأمام/للخلف في سجل ارتباط  البدآف",
 
         # LaTeX Operations
         "compile": "تجميع",
