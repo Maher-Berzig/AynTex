@@ -375,6 +375,35 @@ class SidePanel(QWidget):
             self.btn_down.setEnabled(False)
             self.btn_down.hide()
 
+    def _build_command_tooltip(self, cmd, quick_jump_index=None):
+        """
+        Build an HTML tooltip for a side panel button, styled the same way
+        as ToolbarManager._create_symbol_button: a bold title line, the
+        LaTeX code in <code>, and a shortcut line.
+
+        If the command has an explicit custom shortcut, that's shown.
+        Otherwise:
+          - the first 10 visible buttons already have a real default
+            shortcut (Ctrl+1..Ctrl+9, Ctrl+0 - see
+            MainWindow.setup_keyboard_shortcuts), so that's shown.
+          - beyond that, the button can still be reached via Ctrl+Space
+            quick-jump (the same numbering QuickJumpPopup._populate_list
+            uses), so that's shown instead.
+        """
+        tooltip = f"<b>{cmd.get('label', '')}</b><br>"
+        tooltip += f"LaTeX: <code>{cmd.get('latex', '')}</code>"
+
+        shortcut = cmd.get("shortcut", "").strip()
+        if shortcut:
+            tooltip += f"<br><span style='color:gray;'>Shortcut: <code>{shortcut}</code></span>"
+        elif quick_jump_index is not None and 1 <= quick_jump_index <= 10:
+            default_key = "Ctrl+0" if quick_jump_index == 10 else f"Ctrl+{quick_jump_index}"
+            tooltip += f"<br><span style='color:gray;'>Shortcut: <code>{default_key}</code></span>"
+        elif quick_jump_index is not None:
+            tooltip += f"<br><span style='color:gray;'>Quick jump: <code>Ctrl+Space</code> → {quick_jump_index}</span>"
+
+        return tooltip
+
     def _create_buttons(self):
         """Create buttons from commands"""
         self._clear_buttons()
@@ -399,15 +428,17 @@ class SidePanel(QWidget):
             "padding: 4px 3px"          # less horizontal padding so text isn't clipped
         )
 
+        active_idx = 0  # index among visible buttons, matches QuickJumpPopup._populate_list
         for cmd in self.commands:
             if not cmd.get("label", "").strip() or not cmd.get("latex", "").strip():
                 continue
+            active_idx += 1
 
             btn = QPushButton(cmd["label"])
             btn.setFixedWidth(75)                         # ← was 70, now 86
             btn.setFixedHeight(self.button_height)
             btn.setStyleSheet(panel_btn_style)
-            btn.setToolTip(cmd["latex"])
+            btn.setToolTip(self._build_command_tooltip(cmd, active_idx))
             btn.setFont(ui_font)
 
             latex_code = cmd["latex"].replace('\\n', '\n')
