@@ -31,6 +31,15 @@ class EditorManager:
         self.editor_splitter = None  # For horizontal/vertical mode
         
         self._active_tab_widget_index = 0  # Track active tab widget in H/V mode
+
+        # --- Cursor position history (Alt+Left / Alt+Right) ---
+        self.cursor_back_stack = []     # positions to go back to: [{'file_path', 'position'}, ...]
+        self.cursor_forward_stack = []  # positions to go forward to again after going back
+        self._cursor_history_navigating = False   # True while we're jumping via Alt+Left/Right
+        self._cursor_history_last = None          # (file_path, position) baseline for jump detection
+        self._cursor_history_suppress_next = False  # skip the first event right after a file switch
+        self._cursor_history_max = 100
+        self._cursor_history_min_line_gap = 5     # min line delta to count as a "jump"
         
         from PyQt5.QtCore import QTimer
         bookmark_timer = QTimer()
@@ -719,6 +728,7 @@ class EditorManager:
             # Signals
             editor.document().contentsChanged.connect(self.on_text_changed)
             editor.cursorPositionChanged.connect(self.main_window.update_position)
+            editor.cursorPositionChanged.connect(lambda e=editor: self._on_cursor_position_changed(e))
 
             # Focus handler
             original_focus_in = editor.focusInEvent
@@ -1463,10 +1473,165 @@ class EditorManager:
                 
                 # ✅ FIX: Only update title if file actually changed
                 if old_current != path:
+                    # Record where the cursor was in the file we're leaving,
+                    # so Alt+Left can bring us back to it.
+                    self._record_file_switch_for_cursor_history(old_current)
                     self.main_window.update_title()
                 return
 
     
+    # ============================================================
+    # Cursor position history (Alt+Left / Alt+Right)
+    # ============================================================
+
+    def _get_file_path_for_editor(self, editor):
+        """Find the file path that owns a given editor widget."""
+        for path, data in self.editor_files.items():
+            if data.get('editor') is editor:
+                return path
+        return None
+
+    def _record_cursor_jump(self, file_path, position):
+        """Push a position onto the back-stack (the place we're leaving)."""
+        if not file_path or self._cursor_history_navigating:
+            return
+
+        if self.cursor_back_stack:
+            last = self.cursor_back_stack[-1]
+            if last['file_path'] == file_path and abs(last['position'] - position) < self._cursor_history_min_line_gap:
+                return
+
+        self.cursor_back_stack.append({'file_path': file_path, 'position': position})
+        if len(self.cursor_back_stack) > self._cursor_history_max:
+            self.cursor_back_stack.pop(0)
+
+        # A fresh jump invalidates the old "forward" trail
+        self.cursor_forward_stack.clear()
+
+    def _record_file_switch_for_cursor_history(self, old_file_path):
+        """Called when the active file changes; records the cursor spot in
+        the file being left so Alt+Left can return to it."""
+        if self._cursor_history_navigating:
+            return
+        if old_file_path and old_file_path in self.editor_files:
+            old_editor = self.editor_files[old_file_path].get('editor')
+            if old_editor and hasattr(old_editor, 'textCursor'):
+                try:
+                    self._record_cursor_jump(old_file_path, old_editor.textCursor().position())
+                except Exception:
+                    pass
+        # The next cursorPositionChanged we see belongs to the newly
+        # focused editor - don't treat its initial position as a jump.
+        self._cursor_history_suppress_next = True
+
+    def _on_cursor_position_changed(self, editor):
+        """Detect large cursor "jumps" (search results, tree/bookmark
+        navigation, Go to Line, mouse clicks far away, etc.) and record
+        the position being left so it can be recovered with Alt+Left.
+        Small moves (typing, arrow keys) are ignored so history stays useful."""
+        if self._cursor_history_navigating:
+            return
+        try:
+            file_path = self._get_file_path_for_editor(editor)
+            if not file_path:
+                return
+
+            position = editor.textCursor().position()
+
+            if self._cursor_history_suppress_next:
+                self._cursor_history_suppress_next = False
+                self._cursor_history_last = (file_path, position)
+                return
+
+            if self._cursor_history_last and self._cursor_history_last[0] == file_path:
+                last_pos = self._cursor_history_last[1]
+                doc = editor.document()
+                safe_last_pos = max(0, min(last_pos, doc.characterCount() - 1))
+                temp_cursor = QTextCursor(doc)
+                temp_cursor.setPosition(safe_last_pos)
+                last_block = temp_cursor.blockNumber()
+                current_block = editor.textCursor().blockNumber()
+
+                if abs(current_block - last_block) >= self._cursor_history_min_line_gap:
+                    self._record_cursor_jump(file_path, last_pos)
+
+            self._cursor_history_last = (file_path, position)
+        except Exception as e:
+            print(f"Cursor history tracking error: {e}")
+
+    def _goto_cursor_position(self, file_path, position):
+        """Open/switch to file_path (if needed) and place the cursor at position."""
+        if not file_path:
+            return False
+
+        self._cursor_history_navigating = True
+        try:
+            if file_path not in self.editor_files:
+                if os.path.exists(file_path):
+                    self.open_specific_file(file_path)
+                else:
+                    if hasattr(self.main_window, 'update_status_bar'):
+                        self.main_window.update_status_bar(f"That location is no longer available: {os.path.basename(file_path)}")
+                    return False
+            else:
+                existing_path = self._find_open_file(file_path)
+                if existing_path:
+                    self._switch_to_existing_file(existing_path)
+                    self.current_file = existing_path
+                    file_path = existing_path
+
+            editor = self.editor_files.get(file_path, {}).get('editor')
+            if not editor or not hasattr(editor, 'textCursor'):
+                return False
+
+            doc = editor.document()
+            safe_pos = max(0, min(position, max(doc.characterCount() - 1, 0)))
+            cursor = editor.textCursor()
+            cursor.setPosition(safe_pos)
+            editor.setTextCursor(cursor)
+            editor.ensureCursorVisible()
+            editor.setFocus()
+
+            # Reset the jump-detection baseline to the spot we just landed on,
+            # so this landing spot isn't immediately re-recorded as a jump.
+            self._cursor_history_last = (file_path, safe_pos)
+            self._cursor_history_suppress_next = False
+            return True
+        finally:
+            self._cursor_history_navigating = False
+
+    def navigate_cursor_back(self):
+        """Alt+Left: jump back to the previous cursor position."""
+        if not self.cursor_back_stack:
+            return
+
+        current_editor = self.get_current_editor()
+        current_file = self.get_current_file_path()
+        if current_editor and current_file and hasattr(current_editor, 'textCursor'):
+            current_pos = current_editor.textCursor().position()
+            self.cursor_forward_stack.append({'file_path': current_file, 'position': current_pos})
+            if len(self.cursor_forward_stack) > self._cursor_history_max:
+                self.cursor_forward_stack.pop(0)
+
+        target = self.cursor_back_stack.pop()
+        self._goto_cursor_position(target['file_path'], target['position'])
+
+    def navigate_cursor_forward(self):
+        """Alt+Right: re-jump forward after having gone back."""
+        if not self.cursor_forward_stack:
+            return
+
+        current_editor = self.get_current_editor()
+        current_file = self.get_current_file_path()
+        if current_editor and current_file and hasattr(current_editor, 'textCursor'):
+            current_pos = current_editor.textCursor().position()
+            self.cursor_back_stack.append({'file_path': current_file, 'position': current_pos})
+            if len(self.cursor_back_stack) > self._cursor_history_max:
+                self.cursor_back_stack.pop(0)
+
+        target = self.cursor_forward_stack.pop()
+        self._goto_cursor_position(target['file_path'], target['position'])
+
     def get_current_editor(self):
         """Get current editor widget - FIXED for H/V mode"""
         if self.editor_layout_mode == "tabbed":
