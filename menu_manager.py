@@ -896,6 +896,15 @@ class MenuManager:
             self.main_window.editor_manager.count_selected_words
         )
         edit_menu.addAction(word_count_action)        
+        # Count the characters (with and without spaces) in a selected text
+        character_count_action = QAction(tr.get("character_count", "Characters Count"), self.main_window)
+        character_count_action.setStatusTip(
+            tr.get("status_character_count", "Count characters (with and without spaces) in selected text")
+        )
+        character_count_action.triggered.connect(
+            self.main_window.editor_manager.count_selected_characters
+        )
+        edit_menu.addAction(character_count_action)
         # Delete Auxiliary Files
         delete_aux_action = QAction(
             tr.get("delete_aux_files", "Delete Auxiliary Files...")+"\tCtrl+Shift+Del",
@@ -931,6 +940,12 @@ class MenuManager:
         full_title_case_action.triggered.connect(self.main_window.editor_manager.transform_to_full_title_case)
         transform_menu.addAction(full_title_case_action)   
         # Full title case can be without shortcut        
+        remove_indent_action = QAction(tr.get("remove_indent", "Remove Indent"), self.main_window)
+        remove_indent_action.setStatusTip(
+            tr.get("status_remove_indent", "Remove leading tabs/spaces from each selected line")
+        )
+        remove_indent_action.triggered.connect(self.main_window.editor_manager.remove_selected_indent)
+        transform_menu.addAction(remove_indent_action)
         self.setup_latex_comment_menu(edit_menu)
                
         edit_menu.addSeparator()       
