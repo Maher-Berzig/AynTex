@@ -374,6 +374,8 @@ translations = {
         "status_keyboard_shortcuts": "View all keyboard shortcuts",
         "status_about": "Information about AynTeX",
         "status_view_ayntex_error_log": "View AynTex error and freeze log",
+        "status_character_count": "Count characters (with and without spaces) in selected text",
+        "status_remove_indent": "Remove leading tabs/spaces from each selected line",
 
         # Tooltip
         "tooltip_save_copy_as": "Save a copy of the document without changing the active file",
@@ -440,8 +442,11 @@ translations = {
         "no_files_to_save": "No files need saving",
         "save_errors": "Save Errors",
         "notice": "Notice",
-        "word_count": "Word Count",
+        "word_count": "Words Count",
         "word_count_sentence": "The selected text contains {count} words.",
+        "character_count": "Characters Count",
+        "character_count_sentence": "Characters: {with_spaces} (with spaces), {without_spaces} (without spaces)",
+        "remove_indent": "Remove Indent",
 
         # Help
         "keyboard_shortcuts": "Keyboard shortcuts",
@@ -1115,6 +1120,8 @@ translations = {
         "status_keyboard_shortcuts": "عرض جميع اختصارات لوحة المفاتيح",
         "status_about": "معلومات عن عينتاك",
         "status_view_ayntex_error_log": "عرض خطأ عينتاك وسِجل التجميد",
+        "status_character_count": "عد الأحرف (مع وبدون مسافات) في النص المحدد",
+        "status_remove_indent": "إزالة الفراغات في بداية كل سطر محدد",
 
         # Tooltip
         "tooltip_save_copy_as": "حفظ نسخة من المستند دون تغيير الملف الحالي",
@@ -1183,6 +1190,9 @@ translations = {
         "notice": "تنبيه",
         "word_count": "عدد الكلمات",
         "word_count_sentence": "يحتوي النص المحدد على {count} كلمة.",
+        "character_count": "عدد الأحرف",
+        "character_count_sentence": "عدد الأحرف: {with_spaces} (مع مسافات)، {with_spaces} (بدون مسافات)",
+        "remove_indent": "إزالة الفرغات في بداية الأسطر",
 
         # Help
         "keyboard_shortcuts": "اختصارات لوحة المفاتيح",
