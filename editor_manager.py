@@ -3623,6 +3623,16 @@ Your content goes here.
             return ' '.join(words)
         self._transform_text(full_title)
 
+    def remove_selected_indent(self):
+        """Remove leading indentation (tabs or spaces) from the start of each selected line"""
+        def strip_indent(text):
+            """Strip leading tabs/spaces from each line, leaving the rest of the line untouched"""
+            lines = text.split('\u2029')  # Qt uses Unicode paragraph separator
+            dedented_lines = [line.lstrip(' \t') for line in lines]
+            return '\u2029'.join(dedented_lines)
+
+        self._transform_text(strip_indent)
+
     def _transform_text(self, transform_func):
         """Apply transformation function to selected text with undo support"""
         lang = self.main_window.menu_language
@@ -3700,6 +3710,54 @@ Your content goes here.
         QMessageBox.information(
             self.main_window,
             "Word Count",
+            message
+        )
+
+    def count_selected_characters(self):
+        """Count characters (with and without spaces) in selected text and show result"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        current_editor = self.get_current_editor()
+
+        if not current_editor:
+            return
+
+        cursor = current_editor.textCursor()
+
+        if not cursor.hasSelection():
+            # Status bar feedback
+            if hasattr(self.main_window, "update_status_bar"):
+                self.main_window.update_status_bar("No text selected")
+
+            # Popup warning
+            QMessageBox.information(
+                self.main_window,
+                "Characters Count",
+                "Please select some text first."
+            )
+            return
+
+        selected_text = cursor.selectedText()
+
+        # Fix Qt line separator (still a single character, so counts unaffected)
+        selected_text = selected_text.replace('\u2029', '\n')
+
+        char_count_with_spaces = len(selected_text)
+        char_count_without_spaces = len(selected_text.replace(' ', ''))
+
+        message = tr.get(
+            "character_count_sentence",
+            "Characters: {with_spaces} (with spaces), {without_spaces} (without spaces)"
+        ).format(with_spaces=char_count_with_spaces, without_spaces=char_count_without_spaces)
+
+        # ✅ Status bar
+        if hasattr(self.main_window, "update_status_bar"):
+            self.main_window.update_status_bar(message)
+
+        # ✅ Popup dialog
+        QMessageBox.information(
+            self.main_window,
+            "Characters Count",
             message
         )
     
