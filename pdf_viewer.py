@@ -4716,6 +4716,27 @@ class PDFViewer(QWidget):
             self._update_history_buttons()
     
             
+            # ✅ Guard against reading the PDF while it's still being written
+            # (e.g. right after LaTeX recompilation, the file can briefly
+            # exist with 0 bytes). Retry a few times instead of immediately
+            # failing with EmptyFileError - this transient race usually
+            # resolves within milliseconds.
+            import time
+            max_retries = 5
+            retry_delay = 0.1  # seconds
+            for attempt in range(max_retries):
+                try:
+                    file_size = os.path.getsize(pdf_path)
+                except OSError:
+                    file_size = 0
+                if file_size > 0:
+                    break
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+            else:
+                print(f"⚠️ PDF file is empty or not yet ready, skipping load: {pdf_path}")
+                return False
+
             self.pdf_document = fitz.open(pdf_path)
             self.current_pdf_path = pdf_path
             self.total_pages = len(self.pdf_document)
@@ -4919,7 +4940,7 @@ class PDFViewer(QWidget):
                 
                 if existing_path:
                     # ✅ File is already open - switch to it and jump to line
-                    print(f"✅ File already open: {os.path.basename(existing_path)}")
+                    #print(f"✅ File already open: {os.path.basename(existing_path)}")
                     
                     # Get the editor for this file
                     editor_data = editor_manager.editor_files.get(existing_path)
@@ -5331,21 +5352,21 @@ class PDFViewer(QWidget):
         self.scroll_to_page(0)
         self._ensure_focus_after_action()
     
-    # def go_to_previous_page(self):
-        # """Navigate to previous page (5 pages back)"""
-        # if self.current_page > 4:
-            # self.scroll_to_page(self.current_page - 5)
-        # else:
-            # self.scroll_to_page(0)  # Go to first page if less than 5 pages back
-        # self._ensure_focus_after_action()    
+    def go_to_previous_page(self):
+        """Navigate to previous page (5 pages back)"""
+        if self.current_page > 4:
+            self.scroll_to_page(self.current_page - 5)
+        else:
+            self.scroll_to_page(0)  # Go to first page if less than 5 pages back
+        self._ensure_focus_after_action()
 
-    # def go_to_next_page(self):
-        # """Navigate to next page (5 pages forward)"""
-        # if self.current_page < self.total_pages - 5:
-            # self.scroll_to_page(self.current_page + 5)
-        # else:
-            # self.scroll_to_page(self.total_pages - 1)  # Go to last page if less than 5 pages forward
-        # self._ensure_focus_after_action()
+    def go_to_next_page(self):
+        """Navigate to next page (5 pages forward)"""
+        if self.current_page < self.total_pages - 5:
+            self.scroll_to_page(self.current_page + 5)
+        else:
+            self.scroll_to_page(self.total_pages - 1)  # Go to last page if less than 5 pages forward
+        self._ensure_focus_after_action()
         
     def go_to_last_page(self):
         """Navigate to last page"""
@@ -5425,18 +5446,21 @@ class PDFViewer(QWidget):
         """Handle keyboard shortcuts including navigation"""
         #print(f"⌨️ PDFViewer.keyPressEvent: key={event.key()}, modifiers={event.modifiers()}")
     
-        # Navigation history shortcuts (Alt+Left/Right)
-        if event.modifiers() == Qt.AltModifier:
+        # Navigation history shortcuts (Alt+Shift+Left/Right)
+        mods = event.modifiers()
+        if (mods & Qt.AltModifier) and (mods & Qt.ShiftModifier):
             if event.key() == Qt.Key_Left:
-                print(f"⬅️ Alt+Left detected in PDF viewer keyPressEvent")
+                print("⬅️ Alt+Shift+Left detected in PDF viewer keyPressEvent")
                 self.navigate_back()
                 event.accept()
                 return
             elif event.key() == Qt.Key_Right:
-                print(f"➡️ Alt+Right detected in PDF viewer keyPressEvent")
+                print("➡️ Alt+Shift+Right detected in PDF viewer keyPressEvent")
                 self.navigate_forward()
                 event.accept()
                 return
+
+
 
         # ✅ E KEY - Edit selected text/freetext annotation
         if event.key() == Qt.Key_E:
