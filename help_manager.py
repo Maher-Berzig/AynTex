@@ -95,6 +95,8 @@ class ShortcutsDialog(QDialog):
                 (tr["cut"], "Ctrl+X"),
                 (tr["copy"], "Ctrl+C"),
                 (tr["paste"], "Ctrl+V"),
+                (tr["backtab"], "Shift+Tab"),
+                
                 
                 (tr["find"], "Ctrl+F"),
                 (tr["replace"], "Ctrl+H"),
@@ -108,10 +110,10 @@ class ShortcutsDialog(QDialog):
                 (tr["toggle_comments"], "Ctrl+D"),
                 
                 # Folding operations
-                (tr["fold_current_section"], "\u202ACtrl+Shift+["),
-                (tr["unfold_current_section"], "\u202ACtrl+Shift+]"),
+                (tr["fold_current_section"], "\u202ACtrl+*"),
+                (tr["unfold_current_section"], "\u202ACtrl+Shift+*"),
                 (tr["fold_all"], "\u202ACtrl+Shift+-"),
-                (tr["unfold_all"], "\u202ACtrl+Shift+="),
+                (tr["unfold_all"], "\u202ACtrl+Shift++"),
             ],
             
             tr["view"]: [
