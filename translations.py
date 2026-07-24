@@ -77,6 +77,7 @@ translations = {
         "cut": "Cut",
         "copy": "Copy",
         "paste": "Paste",
+        "backtab": "remove one level of indentation",
         "text_transform": "Text transform",
         "lowercase": "lowercase",
         "uppercase": "UPPERCASE",
@@ -831,6 +832,7 @@ translations = {
         "bilingual": "لغتين",
         "bilingual_insert": "إدراج ثنائي اللغة",
         "edit": "تحرير",
+        "backtab": "إزالة مستوى واحد من مسافة الجدولة",
 
         # Tools
         "special_tools": "أدوات خاصة",
