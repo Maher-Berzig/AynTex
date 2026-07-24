@@ -1457,13 +1457,13 @@ class MenuManager:
         folding_menu = view_menu.addMenu(tr["folding"])
         # Fold current
         fold_action = QAction(tr["fold_current_section"], self.main_window)
-        fold_action.setShortcut("Ctrl+Shift+[")
+        fold_action.setShortcut("Ctrl+*")
         fold_action.setStatusTip(tr["status_fold_current_section"])
         fold_action.triggered.connect(self.main_window.editor_manager.fold_current_section)
         folding_menu.addAction(fold_action)
         # Unfold current
         unfold_action = QAction(tr["unfold_current_section"], self.main_window)
-        unfold_action.setShortcut("Ctrl+Shift+]")
+        unfold_action.setShortcut("Ctrl+Shift+*")
         unfold_action.setStatusTip(tr["status_unfold_current_section"])
         unfold_action.triggered.connect(self.main_window.editor_manager.unfold_current_section)
         folding_menu.addAction(unfold_action)
@@ -1476,7 +1476,7 @@ class MenuManager:
         folding_menu.addAction(fold_all_action)
         # Unfold all
         unfold_all_action = QAction(tr["unfold_all"], self.main_window)
-        unfold_all_action.setShortcut("Ctrl+Shift+=")
+        unfold_all_action.setShortcut("Ctrl+Shift++")
         unfold_all_action.setStatusTip(tr["status_unfold_all"])
         unfold_all_action.triggered.connect(self.main_window.editor_manager.unfold_all_sections)
         folding_menu.addAction(unfold_all_action)
