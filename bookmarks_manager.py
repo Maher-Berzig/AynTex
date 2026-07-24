@@ -7,7 +7,7 @@ import sys
 import re
 from PyQt5.QtWidgets import QWidget, QSizePolicy, QPlainTextEdit, QApplication, QMainWindow, QTextEdit
 from PyQt5.QtGui import (QPen, QBrush, QKeySequence, QTextCursor, QPainter, QColor,
-                          QFont, QTextFormat, QTextOption, QTextCharFormat)
+                          QFont, QTextFormat, QTextOption, QTextCharFormat, QFontMetrics)
 from PyQt5.QtCore import Qt, QRect, QSize, QPoint, QTimer
 from toolbar_manager import BookmarksWidget
 
@@ -179,6 +179,9 @@ class BookmarksManager(QPlainTextEdit):
         self.updateLineNumberAreaWidth()
         self.highlightCurrentLine()
 
+        # Tab should visually span 4 characters, not Qt's default (~8)
+        self._update_tab_stop_width()
+
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(200, 150)
         self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
@@ -187,6 +190,27 @@ class BookmarksManager(QPlainTextEdit):
         doc = self.document()
         doc.setMaximumBlockCount(0)
         self.setUndoRedoEnabled(True)
+
+    def setFont(self, font):
+        """Override so the Tab stop width stays in sync (4 characters wide)
+        whenever the editor's font changes (e.g. font-size settings)."""
+        super().setFont(font)
+        self._update_tab_stop_width()
+
+    def _update_tab_stop_width(self):
+        """Make the Tab key span 4 characters visually, instead of Qt's
+        default of roughly 8, based on the current font's character width."""
+        metrics = QFontMetrics(self.font())
+        tab_width_chars = 4
+        if hasattr(metrics, 'horizontalAdvance'):
+            char_width = metrics.horizontalAdvance(' ')
+        else:
+            char_width = metrics.width(' ')  # older PyQt5 fallback
+
+        if hasattr(self, 'setTabStopDistance'):
+            self.setTabStopDistance(tab_width_chars * char_width)
+        else:
+            self.setTabStopWidth(int(tab_width_chars * char_width))  # older PyQt5 fallback
 
     # ==========================================
     # THEMES COLORS
@@ -1319,6 +1343,73 @@ class BookmarksManager(QPlainTextEdit):
     # KEY PRESS EVENT
     # ==========================================
 
+    def _indent_selected_lines(self, start_block_num, end_block_num):
+        """Insert a tab at the start of every line from start_block_num to
+        end_block_num (inclusive), as a single undo step, then reselect
+        those (now indented) lines."""
+        doc = self.document()
+
+        edit_cursor = QTextCursor(doc)
+        edit_cursor.beginEditBlock()
+        for block_num in range(start_block_num, end_block_num + 1):
+            block = doc.findBlockByNumber(block_num)
+            block_cursor = QTextCursor(block)
+            block_cursor.movePosition(QTextCursor.StartOfBlock)
+            block_cursor.insertText('\t')
+        edit_cursor.endEditBlock()
+
+        # Re-select the same lines so another Tab press keeps indenting
+        new_start_block = doc.findBlockByNumber(start_block_num)
+        new_end_block = doc.findBlockByNumber(end_block_num)
+        new_cursor = self.textCursor()
+        new_cursor.setPosition(new_start_block.position())
+        new_cursor.setPosition(
+            new_end_block.position() + new_end_block.length() - 1,
+            QTextCursor.KeepAnchor
+        )
+        self.setTextCursor(new_cursor)
+
+    def _dedent_selected_lines(self, start_block_num, end_block_num, reselect=True):
+        """Remove one level of leading indentation (a single tab, or up to
+        4 leading spaces) from the start of every line from start_block_num
+        to end_block_num (inclusive), as a single undo step. Lines with no
+        leading whitespace are left untouched. Only reselects the lines
+        afterward if reselect is True (i.e. there was an actual selection
+        to begin with, as opposed to a bare cursor on one line)."""
+        doc = self.document()
+
+        edit_cursor = QTextCursor(doc)
+        edit_cursor.beginEditBlock()
+        for block_num in range(start_block_num, end_block_num + 1):
+            block = doc.findBlockByNumber(block_num)
+            text = block.text()
+            if text.startswith('\t'):
+                chars_to_remove = 1
+            else:
+                leading_spaces = len(text) - len(text.lstrip(' '))
+                chars_to_remove = min(4, leading_spaces)
+
+            if chars_to_remove > 0:
+                block_cursor = QTextCursor(block)
+                block_cursor.movePosition(QTextCursor.StartOfBlock)
+                block_cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, chars_to_remove)
+                block_cursor.removeSelectedText()
+        edit_cursor.endEditBlock()
+
+        if not reselect:
+            return
+
+        # Re-select the same lines so another Shift+Tab press keeps dedenting
+        new_start_block = doc.findBlockByNumber(start_block_num)
+        new_end_block = doc.findBlockByNumber(end_block_num)
+        new_cursor = self.textCursor()
+        new_cursor.setPosition(new_start_block.position())
+        new_cursor.setPosition(
+            new_end_block.position() + new_end_block.length() - 1,
+            QTextCursor.KeepAnchor
+        )
+        self.setTextCursor(new_cursor)
+
     def keyPressEvent(self, event):
         """Handle key events with completion and delimiter support"""
         # ✅ 1. CHECK IF COMPLETION IS ENABLED FIRST
@@ -1384,6 +1475,46 @@ class BookmarksManager(QPlainTextEdit):
 
         cursor = self.textCursor()
         key_text = event.text()
+
+        # ✅ 6b. HANDLE TAB ON A MULTI-LINE SELECTION → indent every touched
+        # line instead of falling through to QPlainTextEdit's default,
+        # which just replaces the whole selection with a single tab
+        # character. A single-line (or empty) selection keeps the normal
+        # "Tab replaces selection" behavior.
+        if event.key() == Qt.Key_Tab and cursor.hasSelection() and event.modifiers() == Qt.NoModifier:
+            start_block_num = self.document().findBlock(cursor.selectionStart()).blockNumber()
+            end_block = self.document().findBlock(cursor.selectionEnd())
+            end_block_num = end_block.blockNumber()
+
+            # If the selection ends right at the start of a line (nothing
+            # from that line is actually selected), don't indent that line.
+            if end_block.position() == cursor.selectionEnd() and end_block_num > start_block_num:
+                end_block_num -= 1
+
+            if end_block_num > start_block_num:
+                self._indent_selected_lines(start_block_num, end_block_num)
+                event.accept()
+                return
+            # else: single line selected - fall through to default behavior
+
+        # ✅ 6c. HANDLE SHIFT+TAB → dedent (remove one level of leading
+        # indentation) from every line touched by the selection, or just
+        # the current line if there's no selection at all. Qt delivers
+        # Shift+Tab as Key_Backtab, but some platforms/widgets can still
+        # send Key_Tab with the shift modifier, so both are handled.
+        if event.key() == Qt.Key_Backtab or (event.key() == Qt.Key_Tab and event.modifiers() == Qt.ShiftModifier):
+            if cursor.hasSelection():
+                start_block_num = self.document().findBlock(cursor.selectionStart()).blockNumber()
+                end_block = self.document().findBlock(cursor.selectionEnd())
+                end_block_num = end_block.blockNumber()
+                if end_block.position() == cursor.selectionEnd() and end_block_num > start_block_num:
+                    end_block_num -= 1
+                self._dedent_selected_lines(start_block_num, end_block_num, reselect=True)
+            else:
+                current_block_num = cursor.blockNumber()
+                self._dedent_selected_lines(current_block_num, current_block_num, reselect=False)
+            event.accept()
+            return
 
         # ✅ 6. HANDLE LATEX DELIMITER COMPLETION (backslash + bracket)
         if self._backslash_selection_state and key_text in ['(', '[', '{', '|']:
