@@ -3633,6 +3633,22 @@ Your content goes here.
 
         self._transform_text(strip_indent)
 
+    def join_selected_lines(self):
+        """Join multiple selected lines into a single line, separated by spaces"""
+        def join_lines(text):
+            """Merge lines together, trimming each line's own leading/trailing
+            whitespace so the join doesn't leave stray indentation or double
+            spaces behind. A single-line selection is left untouched."""
+            lines = text.split('\u2029')  # Qt uses Unicode paragraph separator
+            if len(lines) <= 1:
+                return text
+
+            cleaned_lines = [line.strip() for line in lines]
+            cleaned_lines = [line for line in cleaned_lines if line]  # drop blank lines
+            return ' '.join(cleaned_lines)
+
+        self._transform_text(join_lines)
+
     def _transform_text(self, transform_func):
         """Apply transformation function to selected text with undo support"""
         lang = self.main_window.menu_language
