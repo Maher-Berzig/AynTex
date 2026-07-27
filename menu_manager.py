@@ -946,6 +946,12 @@ class MenuManager:
         )
         remove_indent_action.triggered.connect(self.main_window.editor_manager.remove_selected_indent)
         transform_menu.addAction(remove_indent_action)
+        join_lines_action = QAction(tr.get("join_lines", "Join Lines"), self.main_window)
+        join_lines_action.setStatusTip(
+            tr.get("status_join_lines", "Join multiple selected lines into a single line")
+        )
+        join_lines_action.triggered.connect(self.main_window.editor_manager.join_selected_lines)
+        transform_menu.addAction(join_lines_action)
         self.setup_latex_comment_menu(edit_menu)
                
         edit_menu.addSeparator()       
