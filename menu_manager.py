@@ -952,6 +952,18 @@ class MenuManager:
         )
         join_lines_action.triggered.connect(self.main_window.editor_manager.join_selected_lines)
         transform_menu.addAction(join_lines_action)
+        remove_blank_lines_action = QAction(tr.get("remove_blank_lines", "Remove Blank Lines"), self.main_window)
+        remove_blank_lines_action.setStatusTip(
+            tr.get("status_remove_blank_lines", "Remove blank (empty) lines from the selected text")
+        )
+        remove_blank_lines_action.triggered.connect(self.main_window.editor_manager.remove_selected_blank_lines)
+        transform_menu.addAction(remove_blank_lines_action)
+        comment_blank_lines_action = QAction(tr.get("comment_blank_lines", "Comment Blank Lines"), self.main_window)
+        comment_blank_lines_action.setStatusTip(
+            tr.get("status_comment_blank_lines", "Insert % into blank (empty) lines in the selected text")
+        )
+        comment_blank_lines_action.triggered.connect(self.main_window.editor_manager.comment_selected_blank_lines)
+        transform_menu.addAction(comment_blank_lines_action)
         self.setup_latex_comment_menu(edit_menu)
                
         edit_menu.addSeparator()       
@@ -1476,13 +1488,13 @@ class MenuManager:
         folding_menu.addSeparator()
         # Fold all
         fold_all_action = QAction(tr["fold_all"], self.main_window)
-        fold_all_action.setShortcut("Ctrl+Shift+-")
+        fold_all_action.setShortcut("Ctrl+Shift++")
         fold_all_action.setStatusTip(tr["status_fold_all"])
         fold_all_action.triggered.connect(self.main_window.editor_manager.fold_all_sections)
         folding_menu.addAction(fold_all_action)
         # Unfold all
         unfold_all_action = QAction(tr["unfold_all"], self.main_window)
-        unfold_all_action.setShortcut("Ctrl+Shift++")
+        unfold_all_action.setShortcut("Ctrl+Shift+-")
         unfold_all_action.setStatusTip(tr["status_unfold_all"])
         unfold_all_action.triggered.connect(self.main_window.editor_manager.unfold_all_sections)
         folding_menu.addAction(unfold_all_action)
