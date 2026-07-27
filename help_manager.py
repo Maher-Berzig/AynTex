@@ -9,11 +9,14 @@ from PyQt5.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QFrame, 
     QPushButton, QHeaderView, QHBoxLayout
 )
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtGui import QFont, QPixmap, QGuiApplication
 from PyQt5.QtCore import Qt
 import style_manager 
 import app_info
 
+from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtWidgets import QLabel
 
 
 class ShortcutsDialog(QDialog):
@@ -1050,21 +1053,55 @@ class AboutDialog(QDialog):
         body_l.setContentsMargins(22, 14, 22, 10)
         body_l.setSpacing(10)
 
-        desc_text = (
-            f"{app_info.APP_NAME} is a lightweight editor focused on LaTeX productivity, "
-            "a clean UI, and efficient workflows."
-            if lang == "en" else
-            f"{app_info.APP_NAME_AR} هو محرر خفيف يركز على إنتاجية لاتاك، "
-            "واجهة سهلة الإستخدام لسير عمل فعّال."
+        # desc_text = (
+            # f"{app_info.APP_NAME} is a lightweight editor focused on LaTeX productivity, "
+            # "a clean UI, and efficient workflows."
+            # if lang == "en" else
+            # f"{app_info.APP_NAME_AR} هو محرر خفيف يركز على إنتاجية لاتاك، "
+            # "واجهة سهلة الإستخدام لسير عمل فعّال."
+        # )
+        # desc = QLabel(desc_text)
+        # desc.setWordWrap(True)
+        # desc.setAlignment(Qt.AlignCenter)
+        # desc.setStyleSheet(
+            # f"color:{c['muted']}; font-size:9.5pt;"
+            # " padding:0 20px 4px; background:transparent;"
+        # )
+        # body_l.addWidget(desc)
+
+        
+        url = "https://sites.google.com/view/ayntex-editor"
+
+        # link_text = (
+            # f"<a href='{url}' style='color:{c['muted']}; text-decoration: underline;'>{url}</a>"
+        # )
+
+        link_text = (
+            f"<a href='{url}' style='color:{c['muted']}; text-decoration: underline; "
+            f"font-size: 9pt;'>{url}</a>"
         )
-        desc = QLabel(desc_text)
-        desc.setWordWrap(True)
-        desc.setAlignment(Qt.AlignCenter)
-        desc.setStyleSheet(
-            f"color:{c['muted']}; font-size:9.5pt;"
-            " padding:0 20px 4px; background:transparent;"
-        )
-        body_l.addWidget(desc)
+
+        desc_link = QLabel(link_text)
+        desc_link.setTextFormat(Qt.RichText)
+        desc_link.setWordWrap(True)
+        desc_link.setAlignment(Qt.AlignCenter)
+        desc_link.setOpenExternalLinks(True)
+
+        copy_btn = QPushButton(tr.get("copy", "Copy"))
+        copy_btn.clicked.connect(lambda checked=False, u=url: QGuiApplication.clipboard().setText(u))
+        copy_btn.setFixedSize(110, 30)
+        copy_btn.setCursor(Qt.PointingHandCursor)
+        copy_btn.setStyleSheet(style_manager.get_button_style("normal"))
+
+        link_row = QHBoxLayout()
+        link_row.setContentsMargins(0, 0, 0, 0)
+        link_row.setSpacing(10)
+        link_row.addWidget(desc_link, 1)
+        link_row.addWidget(copy_btn, 0, alignment=Qt.AlignRight)
+
+        body_l.addLayout(link_row)
+
+
 
         tabs = self._styled_tabs(c)
 
@@ -1256,9 +1293,9 @@ class AboutDialog(QDialog):
             ("Font Awesome",         "SIL OFL 1.1",          "https://fontawesome.com/license/free"),
             ("D050000L (URW fonts)", "SIL OFL 1.1",          "https://github.com/ArtifexSoftware/urw-base35-fonts"),
         ]
-        for name, lic_type, url in license_entries:
-            item = QTreeWidgetItem([name, lic_type, url])
-            item.setToolTip(2, url)          # show full URL on hover when column is narrow
+        for name, lic_type, entry_url  in license_entries:
+            item = QTreeWidgetItem([name, lic_type, entry_url ])
+            item.setToolTip(2, entry_url )          # show full entry_url on hover when column is narrow
             tree.addTopLevelItem(item)
 
         links_l.addWidget(tree, stretch=1)
