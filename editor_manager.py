@@ -3649,6 +3649,24 @@ Your content goes here.
 
         self._transform_text(join_lines)
 
+    def remove_selected_blank_lines(self):
+        """Remove blank (empty or whitespace-only) lines from the selected text"""
+        def strip_blank_lines(text):
+            lines = text.split('\u2029')  # Qt uses Unicode paragraph separator
+            non_blank_lines = [line for line in lines if line.strip()]
+            return '\u2029'.join(non_blank_lines)
+
+        self._transform_text(strip_blank_lines)
+
+    def comment_selected_blank_lines(self):
+        """Insert a LaTeX comment symbol (%) into every blank line in the selected text"""
+        def comment_blank_lines(text):
+            lines = text.split('\u2029')  # Qt uses Unicode paragraph separator
+            commented_lines = [line if line.strip() else '%' for line in lines]
+            return '\u2029'.join(commented_lines)
+
+        self._transform_text(comment_blank_lines)
+
     def _transform_text(self, transform_func):
         """Apply transformation function to selected text with undo support"""
         lang = self.main_window.menu_language
