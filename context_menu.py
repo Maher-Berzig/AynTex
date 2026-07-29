@@ -1468,16 +1468,50 @@ class TabContextMenu:
 
     @staticmethod
     def _open_folder(path):
+        """Open the folder containing `path`, with the file itself
+        selected/highlighted whenever the platform supports it.
+        Falls back to simply opening the folder if selection isn't
+        possible (e.g. path is already a folder, or the specific
+        select mechanism isn't available on this system)."""
         if not path:
             return
-        folder = os.path.dirname(path) if os.path.isfile(path) else path
         import subprocess, sys
+
+        is_file = os.path.isfile(path)
+        folder = os.path.dirname(path) if is_file else path
+
         if sys.platform == 'win32':
-            import subprocess
+            norm_path = os.path.normpath(path)
+            if is_file:
+                # /select, (note the trailing comma, no space before the
+                # path) tells Explorer to open the parent folder with
+                # this specific file highlighted.
+                try:
+                    subprocess.Popen(f'explorer /select,"{norm_path}"')
+                    return
+                except Exception:
+                    pass
             subprocess.Popen(['explorer', os.path.normpath(folder)])
+
         elif sys.platform == 'darwin':
+            if is_file:
+                try:
+                    subprocess.Popen(['open', '-R', path])
+                    return
+                except Exception:
+                    pass
             subprocess.Popen(['open', folder])
+
         else:
+            # Linux: no universal "select" standard across file managers.
+            # Try the Nautilus/GNOME Files convention first, then fall
+            # back to just opening the containing folder.
+            if is_file:
+                try:
+                    subprocess.Popen(['nautilus', '--select', path])
+                    return
+                except Exception:
+                    pass
             subprocess.Popen(['xdg-open', folder])
 
     @staticmethod
