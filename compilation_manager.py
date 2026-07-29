@@ -222,10 +222,12 @@ class CompilationManager(QObject):
                         tab_widget.setCurrentIndex(output_tab_index)
                         QApplication.processEvents()
                 
-                # If there are errors, jump to the error line in the editor
+                # If there are errors, report the line without moving the
+                # user's cursor - jumping it automatically was overriding
+                # wherever they were actively working, which felt disruptive.
                 if has_errors:
                     # Use a small delay to ensure UI is updated first
-                    QTimer.singleShot(100, self._jump_to_error_line)
+                    QTimer.singleShot(100, self._report_error_line)
             else:
                 self._try_alternative_tab_switching(has_errors)
         except Exception as e:
@@ -265,9 +267,9 @@ class CompilationManager(QObject):
             if output_tab_index != -1:
                 tab_widget.setCurrentIndex(output_tab_index)
                 
-                # If errors, jump to error line
+                # If errors, report the line (without moving the cursor)
                 if has_errors:
-                    QTimer.singleShot(100, self._jump_to_error_line)
+                    QTimer.singleShot(100, self._report_error_line)
                 return True
         except Exception as e:
             print(f"Error in _switch_tabs_in_widget: {e}")
@@ -503,23 +505,32 @@ class CompilationManager(QObject):
     def cleanup_process(self):
         """Safely cleanup the compilation process"""
         if hasattr(self, 'process') and self.process:
+            proc = self.process
+            self.process = None
             try:
                 # Disconnect all signals first to prevent crashes
-                self.process.readyReadStandardOutput.disconnect()
-                self.process.readyReadStandardError.disconnect()
-                self.process.finished.disconnect()
-                self.process.errorOccurred.disconnect()
+                proc.readyReadStandardOutput.disconnect()
+                proc.readyReadStandardError.disconnect()
+                proc.finished.disconnect()
+                proc.errorOccurred.disconnect()
             except:
                 pass  # Ignore disconnect errors
             
             # Clean up the process
-            if self.process.state() != QProcess.NotRunning:
-                self.process.terminate()
-                if not self.process.waitForFinished(2000):
-                    self.process.kill()
-            
-            self.process.deleteLater()
-            self.process = None   
+            if proc.state() != QProcess.NotRunning:
+                proc.terminate()
+                if not proc.waitForFinished(2000):
+                    proc.kill()
+                    proc.waitForFinished(3000)
+
+            if proc.state() == QProcess.NotRunning:
+                proc.deleteLater()
+            else:
+                # Still alive despite terminate+kill - don't force-delete
+                # it (that's what causes "Destroyed while process is
+                # still running"). Let it clean itself up once it
+                # actually finishes.
+                proc.finished.connect(proc.deleteLater)
 
     def _configure_process_for_silent_execution(self, process):
         """Configure QProcess to suppress console windows on Windows."""
@@ -592,16 +603,19 @@ class CompilationManager(QObject):
         # STORE THE ENGINE - ADD THIS LINE:
         self.current_engine = engine
 
-        # Check if process is actually running (not just locked)
+        # Check if process is actually running (not just locked).
+        # A second press of F5 / the toolbar compile button while a
+        # compilation is already running should STOP that compilation
+        # instead of popping up a blocking "please wait" message.
         if hasattr(self, 'process') and self.process and self.process.state() == QProcess.Running:
-            print("WARNING: LaTeX compilation process is actually running - showing user message")
-            self.show_error("Compilation in Progress", "Please wait for the current compilation to finish.")
+            #print("Compile requested while already compiling - stopping current compilation instead")
+            self.stop_compilation()
             return
         
         # Reset compilation lock if process is not running
         if hasattr(self, '_compilation_in_progress') and self._compilation_in_progress:
             if not (hasattr(self, 'process') and self.process and self.process.state() == QProcess.Running):
-                print("WARNING: LaTeX compilation lock was stuck - resetting it")
+                #print("WARNING: LaTeX compilation lock was stuck - resetting it")
                 self._compilation_in_progress = False
         
         # Set compilation lock and update UI immediately
@@ -921,74 +935,100 @@ class CompilationManager(QObject):
     def stop_compilation(self):
         """Stop LaTeX compilation and update UI properly with complete cleanup"""
         #print("Stopping LaTeX compilation")
-        
-        # Stop timeout timer immediately
-        if hasattr(self, 'compilation_timeout_timer'):
-            self.compilation_timeout_timer.stop()
-            #print("Stopped compilation timeout timer")
-        
-        # Handle process termination
-        if hasattr(self, 'process') and self.process:
-            if self.process.state() == QProcess.Running:
-                #print("Terminating LaTeX compilation process")
-                
-                # Disconnect all signals first to prevent them from firing during cleanup
-                try:
-                    self.process.readyReadStandardOutput.disconnect()
-                    self.process.readyReadStandardError.disconnect() 
-                    self.process.finished.disconnect()
-                    self.process.errorOccurred.disconnect()
-                    #print("Disconnected all process signals")
-                except Exception as e:
-                    print(f"Error disconnecting signals (expected during cleanup): {e}")
-                
-                # Terminate the process
-                self.process.terminate()
-                
-                # Wait for graceful termination, then kill if necessary
-                if not self.process.waitForFinished(3000):  # 3 second timeout
-                    #print("Force killing LaTeX compilation process")
-                    self.process.kill()
-                    # Wait a bit more for kill to take effect
-                    self.process.waitForFinished(1000)
-                
-                #print(f"Process final state: {self.process.state()}")
-            
-            # Clean up process object completely
-            self.process.deleteLater()
-            self.process = None
-            #print("Process object cleaned up")
-        
-        # Force clean up compilation state
-        self._compilation_in_progress = False
-        #print("Compilation lock released")
-        
-        fw = getattr(self.main_window.editor_manager, 'file_watcher', None)
-        if fw:
-            fw.set_compilation_active(False)        
-        
-        # Clean up any compilation data
-        self.compilation_output = ""
-        self.compilation_errors = ""
-        
-        # Update toolbar UI immediately
-        if hasattr(self.main_window, 'toolbar_manager'):
-            self.main_window.toolbar_manager.update_compile_actions(compiling=False)
-            self.main_window.toolbar_manager.on_compilation_finished()
-            # Force reset the internal state
-            self.main_window.toolbar_manager._compiling = False
-            #print("Toolbar UI updated and internal state reset")
-        
-        # Update other UI elements
-        self.update_ui_for_compilation(False)
-        
-        # Clear status and provide feedback
-        self.main_window.update_status_bar("LaTeX compilation stopped by user - ready for new compilation")
-        
-        # Process any remaining Qt events to ensure UI updates
-        QApplication.processEvents()
-        
-        print("Stop compilation completed - system should be ready for new compilation")
+
+        # Guard against repeated/overlapping presses of Stop (F5, toolbar
+        # button, etc.) while we're already in the middle of tearing down
+        # a process - without this, each extra press re-runs the same
+        # terminate/kill sequence on a process that's already dying and
+        # spams "QProcess: Destroyed while process is still running".
+        if getattr(self, '_stopping_compilation', False):
+            return
+        self._stopping_compilation = True
+
+        try:
+            # Stop timeout timer immediately
+            if hasattr(self, 'compilation_timeout_timer'):
+                self.compilation_timeout_timer.stop()
+                #print("Stopped compilation timeout timer")
+
+            # Handle process termination
+            if hasattr(self, 'process') and self.process:
+                proc = self.process
+                # Detach immediately so a new compilation can start right
+                # away without waiting on this process's teardown, and so
+                # a re-entrant call above can't grab the same object.
+                self.process = None
+
+                if proc.state() != QProcess.NotRunning:
+                    #print("Terminating LaTeX compilation process")
+
+                    # Disconnect all signals first to prevent them from firing during cleanup
+                    try:
+                        proc.readyReadStandardOutput.disconnect()
+                        proc.readyReadStandardError.disconnect()
+                        proc.finished.disconnect()
+                        proc.errorOccurred.disconnect()
+                        #print("Disconnected all process signals")
+                    except Exception as e:
+                        print(f"Error disconnecting signals (expected during cleanup): {e}")
+
+                    # Terminate the process
+                    proc.terminate()
+
+                    # Wait for graceful termination, then kill if necessary
+                    if not proc.waitForFinished(3000):  # 3 second timeout
+                        #print("Force killing LaTeX compilation process")
+                        proc.kill()
+                        # Give the OS a bit more time to actually reap it.
+                        proc.waitForFinished(3000)
+
+                    #print(f"Process final state: {proc.state()}")
+
+                if proc.state() == QProcess.NotRunning:
+                    # Safe to delete now.
+                    proc.deleteLater()
+                else:
+                    # Still hasn't died (rare, but can happen with some
+                    # LaTeX distros that wrap the engine in a helper
+                    # process). Don't force-delete it - that's what
+                    # triggers "Destroyed while process is still running".
+                    # Instead, let it clean itself up once it actually
+                    # finishes, whenever that ends up being.
+                    proc.finished.connect(proc.deleteLater)
+                #print("Process object cleaned up")
+
+            # Force clean up compilation state
+            self._compilation_in_progress = False
+            #print("Compilation lock released")
+
+            fw = getattr(self.main_window.editor_manager, 'file_watcher', None)
+            if fw:
+                fw.set_compilation_active(False)
+
+            # Clean up any compilation data
+            self.compilation_output = ""
+            self.compilation_errors = ""
+
+            # Update toolbar UI immediately
+            if hasattr(self.main_window, 'toolbar_manager'):
+                self.main_window.toolbar_manager.update_compile_actions(compiling=False)
+                self.main_window.toolbar_manager.on_compilation_finished()
+                # Force reset the internal state
+                self.main_window.toolbar_manager._compiling = False
+                #print("Toolbar UI updated and internal state reset")
+
+            # Update other UI elements
+            self.update_ui_for_compilation(False)
+
+            # Clear status and provide feedback
+            self.main_window.update_status_bar("LaTeX compilation stopped by user - ready for new compilation")
+
+            # Process any remaining Qt events to ensure UI updates
+            QApplication.processEvents()
+
+            #print("Stop compilation completed - system should be ready for new compilation")
+        finally:
+            self._stopping_compilation = False
 
     def is_compilation_ready(self):
         """Enhanced compilation readiness check with forced cleanup if needed"""
@@ -1196,9 +1236,26 @@ class CompilationManager(QObject):
         
         # Clean up process
         self.cleanup_process()
-        
+
+        # cleanup_process() disconnects the process's 'finished' signal before
+        # killing it, so on_latex_process_finished_with_cleanup() - which is
+        # normally what releases the compile lock, re-arms the file watcher,
+        # and resets the toolbar - will never fire for a timed-out compile.
+        # Without doing that reset here too, _compilation_in_progress stays
+        # True forever and every future Compile click is silently ignored
+        # (and since compile_latex() bails out before ever calling
+        # save_file(), unsaved edits are left unsaved).
+        self._compilation_in_progress = False
+
+        fw = getattr(self.main_window.editor_manager, 'file_watcher', None)
+        if fw:
+            fw.set_compilation_active(False)
+
         # Update UI
         self.update_ui_for_compilation(False)
+        if hasattr(self.main_window, 'toolbar_manager'):
+            self.main_window.toolbar_manager.on_compilation_finished()
+            self.main_window.toolbar_manager._compiling = False
 
                 
     def read_stderr(self):
@@ -1221,8 +1278,22 @@ class CompilationManager(QObject):
     def _on_process_error(self, error):
         """Handle process errors"""
         #print(f"DEBUG: Process error occurred: {error}")
-        
+
+        # Release the compile lock and re-arm the file watcher/toolbar here,
+        # for the same reason as in cleanup_process_with_timeout(): errorOccurred
+        # can fire without a matching 'finished' signal ever arriving, so the
+        # normal on_latex_process_finished_with_cleanup() reset can't be
+        # relied on to run.
+        self._compilation_in_progress = False
+
+        fw = getattr(self.main_window.editor_manager, 'file_watcher', None)
+        if fw:
+            fw.set_compilation_active(False)
+
         self.update_ui_for_compilation(False)
+        if hasattr(self.main_window, 'toolbar_manager'):
+            self.main_window.toolbar_manager.on_compilation_finished()
+            self.main_window.toolbar_manager._compiling = False
         
         from PyQt5.QtCore import QProcess
         error_messages = {
@@ -1317,6 +1388,22 @@ class CompilationManager(QObject):
                     continue
         
         return None
+
+    def _report_error_line(self):
+        """Look up the first error line and surface it in the status bar,
+        WITHOUT moving the user's cursor. This runs automatically after every
+        compile that has errors. _jump_to_error_line() (below) still exists
+        and does the cursor-moving version, in case a manual "Go to Error"
+        action is wired up to it later."""
+        try:
+            combined_output = self.compilation_output + "\n" + self.compilation_errors
+            error_line = self._extract_error_line(combined_output)
+            if error_line:
+                self.main_window.update_status_bar(f"Error at line {error_line} - see Errors tab")
+            return error_line
+        except Exception as e:
+            print(f"Error reporting error line: {e}")
+            return None
 
     def _jump_to_error_line(self):
         """Jump to the first error line in the editor"""
