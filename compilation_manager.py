@@ -176,8 +176,12 @@ class CompilationManager(QObject):
         return any(indicator.lower() in combined_text for indicator in error_indicators)
     
     # Include all other methods from the original CompilationManager...
-    def focus_appropriate_tab(self, has_errors):
-        """Focus Output tab (always in front), jump to error line if errors exist"""
+    def focus_appropriate_tab(self, has_errors, jump_to_error=False):
+        """Focus Output tab (always in front). If jump_to_error is True and
+        there are errors, also move the cursor to the first error line -
+        this should only be requested once we know for certain the
+        compilation truly failed (no PDF was produced), not for
+        in-progress/partial error detection."""
         try:
             tab_widget = None
             possible_names = [
@@ -222,38 +226,40 @@ class CompilationManager(QObject):
                         tab_widget.setCurrentIndex(output_tab_index)
                         QApplication.processEvents()
                 
-                # If there are errors, report the line without moving the
-                # user's cursor - jumping it automatically was overriding
-                # wherever they were actively working, which felt disruptive.
+                # Only move the user's cursor when the caller has confirmed
+                # this is a final, PDF-less failure. Otherwise just report
+                # the line in the status bar without disturbing them.
                 if has_errors:
-                    # Use a small delay to ensure UI is updated first
-                    QTimer.singleShot(100, self._report_error_line)
+                    if jump_to_error:
+                        QTimer.singleShot(100, self._jump_to_error_line)
+                    else:
+                        QTimer.singleShot(100, self._report_error_line)
             else:
-                self._try_alternative_tab_switching(has_errors)
+                self._try_alternative_tab_switching(has_errors, jump_to_error)
         except Exception as e:
             print(f"Warning: Could not focus output tab: {e}")
             import traceback
             traceback.print_exc()
         
             
-    def _try_alternative_tab_switching(self, has_errors):
+    def _try_alternative_tab_switching(self, has_errors, jump_to_error=False):
         try:
             from PyQt5.QtWidgets import QDockWidget, QTabWidget
             dock_widgets = self.main_window.findChildren(QDockWidget)
             for dock in dock_widgets:
                 tab_widgets = dock.findChildren(QTabWidget)
                 for tab_widget in tab_widgets:
-                    self._switch_tabs_in_widget(tab_widget, has_errors)
+                    self._switch_tabs_in_widget(tab_widget, has_errors, jump_to_error)
             from PyQt5.QtWidgets import QSplitter
             splitters = self.main_window.findChildren(QSplitter)
             for splitter in splitters:
                 tab_widgets = splitter.findChildren(QTabWidget)
                 for tab_widget in tab_widgets:
-                    self._switch_tabs_in_widget(tab_widget, has_errors)
+                    self._switch_tabs_in_widget(tab_widget, has_errors, jump_to_error)
         except Exception as e:
             print(f"Alternative tab switching failed: {e}")
     
-    def _switch_tabs_in_widget(self, tab_widget, has_errors):
+    def _switch_tabs_in_widget(self, tab_widget, has_errors, jump_to_error=False):
         """Switch to Output tab in widget, jump to error if needed"""
         try:
             output_tab_index = -1
@@ -267,9 +273,13 @@ class CompilationManager(QObject):
             if output_tab_index != -1:
                 tab_widget.setCurrentIndex(output_tab_index)
                 
-                # If errors, report the line (without moving the cursor)
+                # If errors, jump the cursor when confirmed as a final,
+                # PDF-less failure; otherwise just report the line.
                 if has_errors:
-                    QTimer.singleShot(100, self._report_error_line)
+                    if jump_to_error:
+                        QTimer.singleShot(100, self._jump_to_error_line)
+                    else:
+                        QTimer.singleShot(100, self._report_error_line)
                 return True
         except Exception as e:
             print(f"Error in _switch_tabs_in_widget: {e}")
@@ -357,8 +367,10 @@ class CompilationManager(QObject):
         has_errors = self.has_compilation_errors(output, error) or not success
         #print(f"DEBUG: on_compilation_finished - has_errors={has_errors}")
         
-        # ALWAYS call focus_appropriate_tab to ensure it runs
-        self.focus_appropriate_tab(has_errors)
+        # ALWAYS call focus_appropriate_tab to ensure it runs.
+        # `success` here already reflects overall pass/fail (no PDF => not
+        # success), so jump exactly when there's a genuine failure.
+        self.focus_appropriate_tab(has_errors, jump_to_error=has_errors)
 
 
         # Update status
@@ -608,14 +620,14 @@ class CompilationManager(QObject):
         # compilation is already running should STOP that compilation
         # instead of popping up a blocking "please wait" message.
         if hasattr(self, 'process') and self.process and self.process.state() == QProcess.Running:
-            #print("Compile requested while already compiling - stopping current compilation instead")
+            print("Compile requested while already compiling - stopping current compilation instead")
             self.stop_compilation()
             return
         
         # Reset compilation lock if process is not running
         if hasattr(self, '_compilation_in_progress') and self._compilation_in_progress:
             if not (hasattr(self, 'process') and self.process and self.process.state() == QProcess.Running):
-                #print("WARNING: LaTeX compilation lock was stuck - resetting it")
+                print("WARNING: LaTeX compilation lock was stuck - resetting it")
                 self._compilation_in_progress = False
         
         # Set compilation lock and update UI immediately
@@ -1026,7 +1038,7 @@ class CompilationManager(QObject):
             # Process any remaining Qt events to ensure UI updates
             QApplication.processEvents()
 
-            #print("Stop compilation completed - system should be ready for new compilation")
+            print("Stop compilation completed - system should be ready for new compilation")
         finally:
             self._stopping_compilation = False
 
@@ -1191,8 +1203,6 @@ class CompilationManager(QObject):
         if self.compilation_output:
             last_lines = self.compilation_output.split('\n')[-10:]
         
-        self.focus_appropriate_tab(has_errors)
-        
         pdf_created = False
         if self._last_compiled_pdf_path:
             pdf_created = os.path.exists(self._last_compiled_pdf_path)
@@ -1213,6 +1223,12 @@ class CompilationManager(QObject):
                         pdf_created = True
                 
                 #print(f"DEBUG: Expected PDF not found: {getattr(self, '_last_compiled_pdf_path', 'None')}")
+
+        # Only jump the cursor to the error line when the PDF truly wasn't
+        # produced - if a PDF did come out (e.g. LaTeX recovered in
+        # nonstopmode despite warnings/errors), leave the user's cursor
+        # wherever they were working.
+        self.focus_appropriate_tab(has_errors, jump_to_error=(has_errors and not pdf_created))
         
         if pdf_created:
             self.main_window.update_status_bar("Compilation successful")
@@ -1269,9 +1285,11 @@ class CompilationManager(QObject):
                     self.main_window.errors_text.append(stderr)
                 
                 # If we're getting errors, immediately switch to error tab
+                # (but don't jump the cursor yet - we don't know until the
+                # process finishes whether a PDF will still come out)
                 if stderr.strip() and any(indicator in stderr.lower() for indicator in ['error', '!', 'failed']):
                     #print(f"DEBUG: Error detected in stderr, switching to error tab")
-                    self.focus_appropriate_tab(True)
+                    self.focus_appropriate_tab(True, jump_to_error=False)
             except Exception as e:
                 print(f"Error reading stderr: {e}")
                 
@@ -1314,7 +1332,7 @@ class CompilationManager(QObject):
             if self.compilation_output or self.compilation_errors:
                 #print(f"DEBUG: Compilation crash detected but output present - likely compiler issue")
                 # Focus error tab since there might be useful error info
-                self.focus_appropriate_tab(True)
+                self.focus_appropriate_tab(True, jump_to_error=True)
                 self.main_window.update_status_bar("Compilation terminated - check output for details")
             else:
                 # No output suggests app-level issue
@@ -1327,7 +1345,7 @@ class CompilationManager(QObject):
                 self.show_error("Compilation Error", message)
         
         # Always focus error tab when there's a process error
-        self.focus_appropriate_tab(True)
+        self.focus_appropriate_tab(True, jump_to_error=True)
         
         # Cleanup
         self.cleanup_process()
