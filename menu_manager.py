@@ -1,870 +1,244 @@
-# menu_manager.py
+# toolbar_manager.py
 """
-Menu Manager - Handles menu bar creation and management
+Toolbar Manager - Handles toolbar creation and management
 """
 import os
+import sys
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMenu,
-    QComboBox, QLabel, QTextEdit, QListWidget, QWidgetAction,
-    QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,  
-    QSplitter, QGroupBox, QScrollArea, QMessageBox,
-    QApplication,  QAction, QDialog, QFrame,
-    QSizePolicy, QFileDialog, QDialogButtonBox,
-    QToolBar, QToolButton, QButtonGroup, QRadioButton
+    QToolBar, QToolButton,  QFrame,   QListWidgetItem, 
+    QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget, QLabel, QSizePolicy, QTreeWidget, QTreeWidgetItem, 
+    QTextEdit, QPushButton, QListWidget, QSplitter, QMenu, QAction, QScrollArea, QGridLayout, QStyle, QCheckBox,
+    QMessageBox, QFileDialog, QApplication, QDialog, QHBoxLayout, QDialogButtonBox, QComboBox, QShortcut    
 )
-from PyQt5.QtGui import QPixmap, QFont, QKeySequence, QIcon, QPixmap, QPainter, QCursor
-from PyQt5.QtCore import Qt, QTimer
-from math_symbols_menu import MathSymbolsMenu
-from latex_commands_menu import LatexCommandsMenu
+
+from PyQt5.QtCore import Qt, QPoint, QSize, QTimer, QObject, pyqtSignal
+from PyQt5.QtGui import QFont, QKeySequence,  QTextCursor, QIcon, QPixmap, QPainter, QBrush, QPen, QPainterPath, QColor
 from icons_manager import IconsManager
-from pdf_viewer import PDFViewer
-from errors_manager import ErrorsManager
-from settings_manager import SettingsManager
-from typing import Any, Dict, List
+
+from search_replace_dialog import SearchReplaceDialog
+
+
+
+# Safe import for Arabic Command 
 try:
-    from pdf_comparison import PDFComparisonViewerSimplified
-    PDF_COMPARISON_AVAILABLE = True
+    from arabic_command_dialog import ArabicCommandDialog
+    ARABIC_DIALOG_AVAILABLE = True
 except ImportError:
-    PDF_COMPARISON_AVAILABLE = False
-    PDFComparisonViewer = None
-    #print("Warning: pdf_comparison module not found. PDF comparison features will be disabled.")
-from PyQt5.QtCore import QObject, QEvent
+    ARABIC_DIALOG_AVAILABLE = False
+    print("Warning: arabic_command_dialog.py not found. Arabic command button will show an info message.")
 
+# Safe import for Math Symbols Menu
+try:
+    from math_symbols_menu import MathSymbolsMenu
+    MATH_SYMBOLS_AVAILABLE = True
+except ImportError:
+    MATH_SYMBOLS_AVAILABLE = False
+    print("Warning: math_symbols_menu.py not found. Math symbols button will show an info message.")
 
-
-
-
-from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QVBoxLayout,
-    QTextEdit, QPushButton
-)
-
-from PyQt5.QtGui import QTextOption, QTextBlockFormat, QTextCursor
-
-
-from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QVBoxLayout,
-    QTextEdit, QPushButton
-)
-from PyQt5.QtGui import QFont, QTextCursor
-from PyQt5.QtGui import QTextCursor, QTextBlockFormat
-
-
-
-# Add this class at the top of menu_manager.py
-from PyQt5.QtWidgets import QProxyStyle, QStyle
-from PyQt5.QtCore import Qt
-
-
-
-class RTLMenuStyle(QProxyStyle):
-    """
-    Fixes two RTL menu bugs in Qt:
-    1. Submenus open on wrong side (right instead of left)
-    2. Icon column appears on wrong side
+# Safe import for Latex Commands Menu
+try:
+    from latex_commands_menu import LatexCommandsMenu
+    LATEX_COMMANDS_AVAILABLE = True
+except ImportError:
+    LATEX_COMMANDS_AVAILABLE = False
+    print("Warning: latex_commands_menu.py not found. Latex commands button will show an info message.")
     
-    Works by overriding only the two relevant style hints.
-    Does NOT touch layout direction anywhere.
-    """
-    def __init__(self, is_rtl=False):
-        super().__init__()
-        self.is_rtl = is_rtl
 
-    def styleHint(self, hint, option=None, widget=None, returnData=None):
-        if self.is_rtl:
-            # Force submenus to open on the LEFT side
-            if hint == QStyle.SH_Menu_SubMenuPopupDelay:
-                return 0
-            if hint == QStyle.SH_Menu_Scrollable:
-                return 1
-        return super().styleHint(hint, option, widget, returnData)
-
-    def pixelMetric(self, metric, option=None, widget=None):
-        return super().pixelMetric(metric, option, widget)
-
-
-    def drawPrimitive(self, element, option, painter, widget=None):
-        # Suppress the check indicator box — icon swapping handles it instead
-        if self.is_rtl and element == QStyle.PE_IndicatorMenuCheckMark:
-            return  # draw nothing, icon does the job
-        super().drawPrimitive(element, option, painter, widget)
-
-
-    def drawControl(self, element, option, painter, widget=None):
-        if self.is_rtl and element == QStyle.CE_MenuScroller:
-            return
-        # Strip the checked-item sunken frame
-        if self.is_rtl and element == QStyle.CE_MenuItem:
-            from PyQt5.QtWidgets import QStyleOptionMenuItem
-            if isinstance(option, QStyleOptionMenuItem):
-                if option.checkType != QStyleOptionMenuItem.NotCheckable:
-                    # Remove the "checked" flag before passing to native drawing
-                    # so Qt skips drawing the sunken box around the icon
-                    option.state &= ~QStyle.State_On
-        super().drawControl(element, option, painter, widget)
-
-class DoubleLanguagesInsertion(QDialog):
-    def __init__(self, parent=None, lang="en"):
-        super().__init__(parent)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)   
-        self.main_window = parent
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]                            
-
-        self.setWindowTitle(tr["bilingual_insert"])
-        self.setMinimumSize(600, 300)
-
-        self.editor = None
-
-        layout = QHBoxLayout(self)
-
-        # ---------------- LEFT (natural behavior) ----------------
-        left_layout = QVBoxLayout()
-
-        self.left_text = QTextEdit()
-        self.left_text.setFont(QFont("Noto Sans", 11))
-
-        self.insert_left_btn = QPushButton("Insert")
-        self.insert_left_btn.clicked.connect(self.insert_left)
-
-        left_layout.addWidget(self.left_text)
-        left_layout.addWidget(self.insert_left_btn)
-
-        # ---------------- RIGHT (same editor, cursor starts right) ----------------
-        right_layout = QVBoxLayout()
-
-        self.right_text = QTextEdit()
-        self.right_text.setFont(QFont("Noto Sans", 11))  # same behavior
-
-        # Push cursor to the right ONLY when empty & focused
-        self.right_text.focusInEvent = self._right_focus_in_event
-
-        self.insert_right_btn = QPushButton("أدرج")
-        self.insert_right_btn.clicked.connect(self.insert_right)
-
-        right_layout.addWidget(self.right_text)
-        right_layout.addWidget(self.insert_right_btn)
-
-        layout.addLayout(left_layout)
-        layout.addLayout(right_layout)
-
-    # ------------------------------------------------------------
-    # Editor setter
-    # ------------------------------------------------------------
-    def set_editor(self, editor):
-        self.editor = editor
-
-    # ------------------------------------------------------------
-    # Right editor behavior
-    # ------------------------------------------------------------
-    def _right_focus_in_event(self, event):
-        QTextEdit.focusInEvent(self.right_text, event)
-
-        if not self.right_text.toPlainText():
-            cursor = self.right_text.textCursor()
-
-            block = QTextBlockFormat()
-            block.setLayoutDirection(Qt.RightToLeft)
-
-            cursor.setBlockFormat(block)
-            self.right_text.setTextCursor(cursor)
-    # ------------------------------------------------------------
-    # Insert actions
-    # ------------------------------------------------------------
-    def insert_left(self):
-        if self.editor:
-            text = self.left_text.toPlainText().strip()
-            if text:
-                cursor = self.editor.textCursor()
-                cursor.insertText(text)
-                self.editor.setFocus()
-                self.left_text.clear()
-
-    def insert_right(self):
-        if self.editor:
-            text = self.right_text.toPlainText().strip()
-            if text:
-                cursor = self.editor.textCursor()
-                cursor.insertText(text)
-                self.editor.setFocus()
-                self.right_text.clear()
-
-
-
-                
-class TooltipBlockFilter(QObject):
-    """Event filter that blocks all tooltip events application-wide"""
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.ToolTip:
-            return True  # Block the tooltip
-        return super().eventFilter(obj, event)
-
-class MenuManager:
+class ToolbarManager:
     def __init__(self, main_window):
         self.main_window = main_window
-        self.icons_manager = IconsManager()
-        self.math_menu_builder = MathSymbolsMenu(
-            main_window,
-            main_window.editor_manager.insert_latex,
-            main_window.menu_language
-        )
-        self.latex_commands_menu_builder = LatexCommandsMenu(
-            main_window,
-            main_window.editor_manager.insert_latex,
-            main_window.menu_language
-        )
-        self.search_replace_dialog = None
-        self.recent_files_menu = None  # Will be created
-
-    def _setup_menu_close_protection(self):
-        """Protect against stray clicks after a menu action is triggered."""
-        from PyQt5.QtCore import QTimer
-        from PyQt5.QtWidgets import QToolBar
-
-        self._menu_close_timer = QTimer()
-        self._menu_close_timer.setSingleShot(True)
-        self._menu_close_timer.timeout.connect(self._reenable_toolbars)
-
-        # Connect each top-level menu's triggered signal
-        for action in self.main_window.menuBar().actions():
-            menu = action.menu()
-            if menu:
-                menu.triggered.connect(self._on_menu_action_triggered)
-
-    def _on_menu_action_triggered(self, action):
-        """Called when any action in a menu is actually triggered (clicked)."""
-        # Disable all toolbars briefly
-        for tb in self.main_window.findChildren(QToolBar):
-            tb.setEnabled(False)
-        self._menu_close_timer.start(150)
-
-    def _reenable_toolbars(self):
-        """Re-enable toolbars after the protection period."""
-        for tb in self.main_window.findChildren(QToolBar):
-            tb.setEnabled(True)
-            
-    def create_menu_bar(self):
-        """Create the entire menu bar (called once)"""
-        if self.main_window.menus_initialized:
-            return
-        # Clear existing menus
-        menu_bar = self.main_window.menuBar()
-        menu_bar.clear()
-        # Set layout direction BEFORE creating any menus
-        lang = self.main_window.menu_language
-        is_rtl = (lang == "ar")
-        direction = Qt.RightToLeft if is_rtl else Qt.LeftToRight
-        menu_bar.setLayoutDirection(direction)
-        self.main_window.is_rtl = is_rtl
-        # ✅ NEW: Update language in menu builders BEFORE creating menus
-        self.math_menu_builder.menu_language = lang
-        self.latex_commands_menu_builder.menu_language = lang 
-        # ✅ ADD THESE TWO LINES to rebuild with correct language
-        self.math_menu_builder.build_symbol_categories()
-        self.latex_commands_menu_builder.build_commands_categories()        
-        # Apply UI font to menu bar
-        current_fonts = self.main_window.get_current_font_settings()
-        ui_font_family = current_fonts.get('ui_font_family', 'Arial')
-        ui_font_size = current_fonts.get('toolbar_font_size', 10)
-        menu_font = QFont(ui_font_family, ui_font_size)
-        menu_bar.setFont(menu_font)
-        # Create menus with mnemonics (Alt + underlined letter)
-        self._create_file_menu()    # → Alt+F
-        self._create_edit_menu()    # → Alt+E
-        self._create_view_menu()    # → Alt+V
-        self._create_tools_menu()    # → Alt+T
-        self._create_latex_menu()   # → Alt+L
-        self._create_options_menu() # → Alt+O
-        self._create_help_menu()    # → Alt+H
-        self.main_window.menus_initialized = True
-        # Apply RTL and font to all menus AFTER creation
-        self._apply_menu_font_and_direction(menu_font)
-        # Ensure visibility
-        menu_bar.setVisible(True)
-        menu_bar.show()
+        self.icons_manager = main_window.icons_manager 
+        self.main_toolbar = None
+        text_dir_action = self.main_window.is_rtl        
+        self.bookmarks_action = None
         
-        self._setup_menu_close_protection()
+        # Initialize tab visibility states - sync with main_window
+        self.symbols_tab_visible = getattr(main_window, 'symbols_tab_visible', False)
+        self.commands_tab_visible = getattr(main_window, 'commands_tab_visible', False)
+        self.tree_tab_visible = getattr(main_window, 'tree_tab_visible', False)
+        self.bookmarks_tab_visible = getattr(main_window, 'bookmarks_tab_visible', False)
+        self.terminal_tab_visible = getattr(main_window, 'terminal_tab_visible', False)
+        
+        icons_manager = IconsManager(icons_folder="icons")
+        self.main_window = main_window
+        self.icons_manager = icons_manager
+        
+        # ✅ ADD: Double-click protection timers
+        self._last_compile_click_time = 0
+        self._last_backmatter_click_time = 0
+        self._click_debounce_ms = 500 
+        
+        # Initialize symbol and command handlers
+        self.math_symbols_handler = MathSymbolsMenu(
+            main_window, 
+            main_window.editor_manager.insert_latex_command,
+            main_window.menu_language
+        )
+        self.latex_commands_handler = LatexCommandsMenu(
+            main_window,
+            main_window.editor_manager.insert_latex_command, 
+            main_window.menu_language
+        )
 
 
-    def _make_rtl_checkable(self, action, checked_icon="checked", unchecked_icon="unchecked"):
-        """
-        Replace Qt's broken RTL check indicator with icon swapping.
-        Works because the icon column renders correctly in RTL.
-        """
-        def _update_icon(checked):
-            icon_name = checked_icon if checked else unchecked_icon
-            self.icons_manager.apply_icon_to_action(action, icon_name)
-
-        # Set initial icon
-        _update_icon(action.isChecked())
-        # Keep it in sync on every toggle
-        action.toggled.connect(_update_icon)
-    
-    # def _apply_menu_font_and_direction(self, font):
-        # """
-        # CLEAN VERSION - only QApplication gets direction.
-        # No setLayoutDirection on any QMenu or QMenuBar children.
-        # RTLMenuStyle handles submenu popup side and icon placement.
-        # """
-        # lang = self.main_window.menu_language
-        # is_rtl = (lang == "ar")
-        # direction = Qt.RightToLeft if is_rtl else Qt.LeftToRight
-
-        # # ✅ ONLY set direction here — nowhere else
-        # app = QApplication.instance()
-        # if app:
-            # app.setLayoutDirection(direction)
-            # # Apply RTL style fix to the entire application
-            # app.setStyle(RTLMenuStyle(is_rtl=is_rtl))
-
-        # menu_bar = self.main_window.menuBar()
-        # menu_bar.setFont(font)
-
-        # # ONLY apply font — no setLayoutDirection on any menu
-        # for menu in menu_bar.findChildren(QMenu):
-            # menu.setFont(font)
-            # for action in menu.actions():
-                # action.setFont(font)
-
-
-    def _apply_menu_font_and_direction(self, font):
-        lang = self.main_window.menu_language
-        is_rtl = (lang == "ar")
-        direction = Qt.RightToLeft if is_rtl else Qt.LeftToRight
-
-        app = QApplication.instance()
-        if app:
-            app.setLayoutDirection(direction)
-            app.setStyle(RTLMenuStyle(is_rtl=is_rtl))
-
-            # Tell style_manager whether RTL menu CSS is needed,
-            # then re-apply the current theme — it will append RTL CSS automatically
-            import style_manager
-            style_manager.set_rtl_menu_active(is_rtl)
-            current_theme = getattr(self.main_window, 'app_theme', 'default')
-            style_manager.apply_theme(app, current_theme)
-
-        menu_bar = self.main_window.menuBar()
-        menu_bar.setFont(font)
-        for menu in menu_bar.findChildren(QMenu):
-            menu.setFont(font)
-            for action in menu.actions():
-                action.setFont(font)
-            
-
-    def update_menu_font(self):
-        """Update font on existing menus without recreating them"""
+    def _is_debounced(self, last_click_time):
+        """Check if click should be ignored due to debouncing"""
+        import time
+        current_time = time.time() * 1000  # Convert to milliseconds
+        if current_time - last_click_time < self._click_debounce_ms:
+            return True
+        return False
+       
+       
+    def create_main_toolbar(self):
+        """Create the main toolbar"""        
+        
+        # Synchronously remove all "Main" toolbars
+        for toolbar in self.main_window.findChildren(QToolBar):
+            if toolbar.windowTitle() == "Main":
+                self.main_window.removeToolBar(toolbar)
+                toolbar.setParent(None)  # ← synchronous, forces immediate destruction
+                del toolbar
+        self.main_toolbar = None
+                
+        self.main_toolbar = self.main_window.addToolBar("Main")
+        self.main_toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)       
+        
         current_fonts = self.main_window.get_current_font_settings()
         ui_font_family = current_fonts.get('ui_font_family', 'Arial')
-        ui_font_size = current_fonts.get('toolbar_font_size', 10)
-        menu_font = QFont(ui_font_family, ui_font_size)
-        self._apply_menu_font_and_direction(menu_font)            
+        ui_font_size = current_fonts.get('toolbar_font_size', 10)  # ← ADD THIS
+        
+        # Create font with BOTH family and size
+        font = QFont(ui_font_family, ui_font_size)
+        self.main_toolbar.setFont(font)
+        
+       
+        #self.main_toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)# Set icon-only mode (removes text labels below icons)
 
-    def _create_file_menu(self):
+            
+        self.main_toolbar.setIconSize(QSize(30, 30))
+        self.main_toolbar.setStyleSheet("QToolBar { spacing: 2px; } QToolButton { padding: 2px; }")
+        #self.main_window.addToolBar(self.main_toolbar)        
+        
+        self._create_file_actions()
+        #self.main_toolbar.addSeparator()
+        self._create_edit_actions()
+        self.main_toolbar.addSeparator()
+        self._create_latex_actions()
+        self.main_toolbar.addSeparator()
+        self._create_arabic_actions()
+        self.main_toolbar.addSeparator()
+
+        # Replace menu-based symbols/commands with toggle buttons
+        self._create_symbols_toggle()
+        self._create_commands_toggle()
+        # Add tree button
+        self._create_tree_toggle()
+        # Add bookmarks button
+        self._create_bookmarks_toggle()
+        # Add terminal button
+        #self._create_terminal_toggle()
+        self.main_toolbar.addSeparator()
+        self._create_view_actions()
+        self.main_toolbar.addSeparator()
+        self._create_settings_actions()
+
+        # Apply font to all toolbar buttons AFTER creating actions
+        self._apply_font_to_toolbar_buttons(font)
+        
+        # Add context menu to toolbar
+        self.main_toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.main_toolbar.customContextMenuRequested.connect(self.show_toolbar_context_menu)
+        
+        # Force UI refresh
+        self.main_toolbar.update()
+        self.main_toolbar.repaint()
+        self.main_window.update()        
+
+    def _apply_font_to_toolbar_buttons(self, font):
+        """Apply font to all toolbar button widgets"""
+        if not self.main_toolbar:
+            return
+        
+        for action in self.main_toolbar.actions():
+            widget = self.main_toolbar.widgetForAction(action)
+            if widget:
+                widget.setFont(font)
+        
+    def _hide_side_panel_from_toolbar(self):
+        """Hide side panel and sync the menu checkbox."""
+        self.main_window.set_side_panel_visible(False)
+        mm = getattr(self.main_window, 'menu_manager', None)
+        if mm:
+            act = getattr(mm, 'toggle_visibility_action', None)
+            if act is not None:
+                act.blockSignals(True)
+                act.setChecked(False)
+                act.blockSignals(False)
+            
+    def show_toolbar_context_menu(self, position):
+        """Show context menu for toolbar"""
+        menu = QMenu(self.main_window)
+
+        # Hide toolbar action
+        hide_action = QAction("Hide Toolbar (F10)", self.main_window)
+        hide_action.triggered.connect(lambda: self.main_window.menu_manager.toggle_main_toolbar())
+        menu.addAction(hide_action)
+
+        # Side panel action with dynamic text
+        is_visible = self.main_window.menu_manager.toggle_visibility_action.isChecked()
+        text = "Hide Side Panel (F9)" if is_visible else "Show Side Panel (F9)"
+        hide_panel_action = QAction(text, self.main_window)
+        hide_panel_action.triggered.connect(
+            lambda: self.main_window.menu_manager.toggle_visibility_action.trigger()
+        )
+        menu.addAction(hide_panel_action)
+        # Show menu at cursor position
+        menu.exec_(self.main_toolbar.mapToGlobal(position))        
+    
+    def _create_file_actions(self):
+        """Create file-related toolbar actions"""
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
-        file_menu = self.main_window.menuBar().addMenu("&"+tr["file_menu"])
-        # New
+        
+        # New File
         new_action = QAction(tr["new"], self.main_window)
-        new_action.setShortcut("Ctrl+N")
-        new_action.setStatusTip(tr["new"])   # ✅ Status tip
+        #new_action.setShortcut("Ctrl+N")
+        new_action.setToolTip(tr["tooltip_new"])
         new_action.triggered.connect(self.main_window.editor_manager.new_file)
         self.icons_manager.apply_icon_to_action(new_action, "new")
-        file_menu.addAction(new_action)
-        file_menu.addSeparator()
-        # Open
+        self.main_toolbar.addAction(new_action)
+        
+        # Open File      
         open_action = QAction(tr["open"], self.main_window)
-        open_action.setShortcut("Ctrl+O")
-        open_action.setStatusTip(tr["open"])   # ✅ Status tip
+        #open_action.setShortcut("Ctrl+O")
+        open_action.setToolTip(tr["tooltip_open"])
         open_action.triggered.connect(self.main_window.editor_manager.open_file)
         self.icons_manager.apply_icon_to_action(open_action, "open")
-        file_menu.addAction(open_action)
-        # Open PDF
+        self.main_toolbar.addAction(open_action)
+        
+        
+        # Open PDF - FIXED: Added missing Open PDF button
         open_pdf_action = QAction(tr["open_pdf"], self.main_window)
-        open_pdf_action.setShortcut("Ctrl+Shift+O")
-        open_pdf_action.setStatusTip(tr["open_pdf"])   # ✅ Status tip
+        #open_pdf_action.setShortcut("Ctrl+Shift+O")
+        open_pdf_action.setToolTip(tr["tooltip_open_pdf"])
         open_pdf_action.triggered.connect(self.main_window.pdf_manager.open_pdf_file)
         self.icons_manager.apply_icon_to_action(open_pdf_action, "pdf")
-        file_menu.addAction(open_pdf_action)
-        file_menu.addSeparator()
-        # Recent Files
-        self._create_recent_files_menu(file_menu)
-        file_menu.addSeparator()
-        # Create the submenu
-        self.recent_pdf_files_menu = file_menu.addMenu(
-            tr.get("recent_pdf_files", "Recent PDF Files")
-        )
-        # Populate it immediately
-        self.update_recent_pdf_files_menu()
-        file_menu.addSeparator()          
-        # Save
-        save_action = QAction(tr["save"]+"\tCtrl+S", self.main_window)
-        save_action.setShortcut("Ctrl+S")
-        save_action.setStatusTip(tr["save"])   # ✅ Status tip
+        self.main_toolbar.addAction(open_pdf_action)
+        
+        # Save File
+        save_action = QAction(tr["save"], self.main_window)
+        #save_action.setShortcut("Ctrl+S")
+        save_action.setToolTip(tr["tooltip_save"])
         save_action.triggered.connect(self.main_window.editor_manager.save_file)
         self.icons_manager.apply_icon_to_action(save_action, "save")
-        file_menu.addAction(save_action)
-        # Save As
-        save_as_action = QAction(tr["save_as"], self.main_window)
-        save_as_action.setShortcut("Ctrl+Shift+S")
-        save_as_action.setStatusTip(tr["save_as"])   # ✅ Status tip
-        save_as_action.triggered.connect(self.main_window.editor_manager.save_as_file)
-        self.icons_manager.apply_icon_to_action(save_as_action, "save_as")
-        file_menu.addAction(save_as_action)
-        # Save a Copy As
-        save_copy_action = QAction(tr.get("save_copy_as", "Save a Copy As..."), self.main_window)
-        save_copy_action.setShortcut("Ctrl+Shift+C")           # optional, but distinct
-        save_copy_action.setStatusTip(tr.get("save_copy_as", "Save a copy of the current document under a new name"))
-        save_copy_action.setToolTip(tr.get("tooltip_save_copy_as", "Save a copy without changing the active file"))
-        save_copy_action.triggered.connect(self.main_window.editor_manager.save_copy_as)
-        self.icons_manager.apply_icon_to_action(save_copy_action, "save_copy_as")   # you may need a dedicated icon
-        file_menu.addAction(save_copy_action)
-        file_menu.addSeparator()
-        # ── Master Document ───────────────────────────────────────────────
-        self.set_master_action = QAction(
-            tr.get("set_master_document", "Set as Master Document"),
-            self.main_window
-        )
-        self.set_master_action.setStatusTip(
-            tr.get("status_set_master_document",
-                   "Mark the active .tex file as the master document for compilation")
-        )
-        self.icons_manager.apply_icon_to_action(self.set_master_action, "flag")
-        self.set_master_action.triggered.connect(self._set_master_document)
-        file_menu.addAction(self.set_master_action)
-
-        self.clear_master_action = QAction(
-            tr.get("clear_master_document", "Clear Master Document"),
-            self.main_window
-        )
-        self.clear_master_action.setStatusTip(
-            tr.get("status_clear_master_document",
-                   "Remove master document designation — compile the foreground file instead")
-        )
-        #self.icons_manager.apply_icon_to_action(self.clear_master_action, "clear_master")
-        self.clear_master_action.triggered.connect(self._clear_master_document)
-        file_menu.addAction(self.clear_master_action)
-
-        # Keep action states fresh whenever the File menu opens
-        file_menu.aboutToShow.connect(self._update_master_actions_state)
-        self._update_master_actions_state()   # set initial state
-        # ─────────────────────────────────────────────────────────────────
-        file_menu.addSeparator()        
-        # Close Tex File
-        close_tex_action = QAction(tr["close_tex"], self.main_window)
-        close_tex_action.setShortcut("Ctrl+Q")
-        close_tex_action.setStatusTip(tr["close_tex"])   # ✅ Status tip
-        close_tex_action.triggered.connect(self.main_window.editor_manager.close_current_file)
-        self.icons_manager.apply_icon_to_action(close_tex_action, "close_tex")
-        file_menu.addAction(close_tex_action)
-        # Close PDF File
-        close_pdf_action = QAction(tr["close_pdf"], self.main_window)
-        close_pdf_action.setShortcut("Ctrl+Shift+Q")
-        close_pdf_action.setStatusTip(tr["close_pdf"])   # ✅ Status tip
-        close_pdf_action.triggered.connect(self.main_window.pdf_manager.close_current_pdf)
-        self.icons_manager.apply_icon_to_action(close_pdf_action, "close_pdf")
-        file_menu.addAction(close_pdf_action)
-        file_menu.addSeparator()
-        # Save all
-        save_all_action = QAction(tr["save_all"], self.main_window)    
-        save_all_action.setStatusTip(tr["save_all"])   # ✅ Status tip
-        save_all_action.triggered.connect(self.main_window.editor_manager.save_all)
-        self.icons_manager.apply_icon_to_action(save_all_action, "save_all")
-        file_menu.addAction(save_all_action)
-        # ✅ Add to main window to ensure global scope
-        self.main_window.addAction(save_all_action)
-        # Close All Tex Files
-        close_all_tex_action = QAction(tr["close_all_tex"], self.main_window)        
-        close_all_tex_action.setStatusTip(tr["close_all_tex"])   # ✅ Status tip
-        close_all_tex_action.triggered.connect(self.main_window.editor_manager.close_all_files)
-        self.icons_manager.apply_icon_to_action(close_all_tex_action, "close_all_tex")
-        file_menu.addAction(close_all_tex_action)        
-        # Close All PDF Files
-        close_all_pdf_action = QAction(tr["close_all_pdf"], self.main_window)
-        #close_all_pdf_action.setShortcut("Ctrl+Shift+Q")
-        close_all_pdf_action.setStatusTip(tr["close_all_pdf"])   # ✅ Status tip
-        close_all_pdf_action.triggered.connect(self.main_window.pdf_manager.close_all_pdfs)
-        self.icons_manager.apply_icon_to_action(close_all_pdf_action, "close_all_pdf")
-        file_menu.addAction(close_all_pdf_action)
-        file_menu.addSeparator()
-        # Exit
-        exit_action = QAction(tr["exit"], self.main_window)
-        exit_action.setStatusTip(tr["exit"])   # ✅ Status tip        
-        exit_action.setText(f'{tr["exit"]}\tAlt+F4')
-        exit_action.triggered.connect(self.main_window.close)
-        self.icons_manager.apply_icon_to_action(exit_action, "exit")
-        file_menu.addAction(exit_action)
+        self.main_toolbar.addAction(save_action)
         
-        self._setup_menu_close_protection()
-
-
-    def _create_recent_files_menu(self, parent_menu):
-        """Create Recent Files submenu"""
-        lang = self.main_window.menu_language
-        self.recent_files_menu = parent_menu.addMenu(            
-            self.main_window.translations[lang].get("recent_files", "Recent Files")
-        )
-        self.update_recent_files_menu()  # Populate it
-
-
-    
-    def create_number_icon(self, number):
-        from PyQt5.QtGui import QPixmap, QPainter, QIcon, QFont
-        from PyQt5.QtCore import Qt
-
-        size = 18
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-
-        painter = QPainter(pixmap)
-        try:
-            painter.setRenderHint(QPainter.Antialiasing)
-
-            # Set visible color
-            painter.setPen(Qt.black)
-
-            # Adjust font size
-            font = QFont()
-            font.setBold(True)
-            font.setPointSize(8)
-            painter.setFont(font)
-
-            painter.drawText(pixmap.rect(), Qt.AlignCenter, str(number))
-        finally:
-            painter.end()
-
-        return QIcon(pixmap)
-
-    def update_recent_files_menu(self):
-        """Update the recent files menu with current list — single scrollable column"""
-        if not self.recent_files_menu:
-            return
-
-        self.recent_files_menu.clear()
-        lang = self.main_window.menu_language
-
-        if not hasattr(self.main_window, 'config_manager'):
-            return
-
-        recent_files = self.main_window.config_manager.get_recent_files()
-
-        if not recent_files:
-            no_files_action = QAction(
-                self.main_window.translations[lang].get("no_recent_files", "No recent files"),
-                self.main_window
-            )
-            no_files_action.setEnabled(False)
-            self.recent_files_menu.addAction(no_files_action)
-            return
-
-        # --- Scrollable container widget ---
-        from PyQt5.QtWidgets import (
-            QScrollArea, QWidget, QVBoxLayout,
-            QToolButton, QWidgetAction, QSizePolicy
-        )
-        from PyQt5.QtCore import Qt
-
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setContentsMargins(2, 2, 2, 2)
-        scroll_layout.setSpacing(1)
-
-
-        for i, file_path in enumerate(recent_files[:100]):
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(0)
-
-            btn = QToolButton()
-            btn.setText(f"   {file_path}")
-            btn.setIcon(self.create_number_icon(i + 1))
-            btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-            btn.setToolTip(file_path)
-            btn.setStatusTip(
-                self.main_window.translations[lang].get(
-                    "open_recent_file_status", "Open this recent file"
-                )
-            )
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setAutoRaise(True)
-            btn.setMinimumWidth(260)
-            btn.clicked.connect(
-                lambda checked, path=file_path: (
-                    self.force_close_all_menus(),
-                    #self.open_recent_file(path)
-                    QTimer.singleShot(0, lambda: self.open_recent_file(path))
-                )
-            )
-
-            remove_btn = QToolButton()
-            remove_btn.setText("⨉")
-            remove_btn.setAutoRaise(True)
-            remove_btn.setToolTip(f"Remove from recent files")
-            remove_btn.setFixedWidth(28)
-            remove_btn.clicked.connect(
-                lambda checked, path=file_path: self._remove_recent_file_and_refresh(path)
-            )
-
-            row_layout.addWidget(btn)
-            row_layout.addWidget(remove_btn)
-            scroll_layout.addWidget(row_widget)            
-            
-###
-
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(scroll_widget)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setMaximumHeight(400)
-        scroll_area.setMinimumWidth(350)
-        # Remove the box border
-        scroll_area.setFrameShape(QScrollArea.NoFrame)
-
-        container_action = QWidgetAction(self.recent_files_menu)
-        container_action.setDefaultWidget(scroll_area)
-        self.recent_files_menu.addAction(container_action)
-
-        # --- Static actions below the scroll area ---
-        self.recent_files_menu.addSeparator()
-
-        open_all_action = QAction(
-            self.main_window.translations[lang].get("open_all_recent", "Open All Recent Files"),
-            self.main_window
-        )
-        open_all_action.setStatusTip(
-            self.main_window.translations[lang].get(
-                "open_all_recent_status", "Open all recent files at once"
-            )
-        )
-        open_all_action.triggered.connect(self.open_all_recent_files)
-        self.recent_files_menu.addAction(open_all_action)
-
-        clear_action = QAction(
-            self.main_window.translations[lang].get("clear_recent_files", "Clear Recent Files"),
-            self.main_window
-        )
-        clear_action.setStatusTip(
-            self.main_window.translations[lang].get(
-                "clear_recent_files_status", "Remove all files from the recent list"
-            )
-        )
-        clear_action.triggered.connect(self.clear_recent_files)
-        self.recent_files_menu.addAction(clear_action)
-
-    def _remove_recent_file_and_refresh(self, file_path):
-        """Remove a single file from recent list and refresh the menu."""
-        if hasattr(self.main_window, 'config_manager'):
-            self.main_window.config_manager.remove_recent_file(file_path)
-        self.update_recent_files_menu()
-
-    # def open_recent_file(self, file_path):
-        # """Open a recent file (delay opening to let menu close first)"""
-        # if not file_path or not os.path.exists(file_path):
-            # from PyQt5.QtWidgets import QMessageBox
-            # reply = QMessageBox.question(
-                # self.main_window,
-                # "File Not Found",
-                # f"File not found:\n{file_path}\n\nRemove from recent files?",
-                # QMessageBox.Yes | QMessageBox.No
-            # )
-            # if reply == QMessageBox.Yes and hasattr(self.main_window, 'config_manager'):
-                # self.main_window.config_manager.remove_recent_file(file_path)
-                # self.update_recent_files_menu()
-            # return
-
-        # # Delay the actual opening – menu will close during this delay
-        # QTimer.singleShot(30, lambda: (
-            # self.main_window.editor_manager.open_specific_file(file_path),
-            # self.update_recent_files_menu()
-        # ))
-
-    def open_recent_file(self, file_path):
-        """Open a recent file with wait cursor for large files"""
-        from PyQt5.QtWidgets import QApplication, QMessageBox
-        from PyQt5.QtCore import Qt
-
-        if not file_path or not os.path.exists(file_path):
-            reply = QMessageBox.question(
-                self.main_window,
-                "File Not Found",
-                f"File not found:\n{file_path}\n\nRemove from recent files?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes and hasattr(self.main_window, 'config_manager'):
-                self.main_window.config_manager.remove_recent_file(file_path)
-                self.update_recent_files_menu()
-            return
-
-        # --- Show wait cursor ---
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()  # Force cursor update
-
-        try:
-            # Open the file (this may be slow for large files)
-            self.main_window.editor_manager.open_specific_file(file_path)
-            self.update_recent_files_menu()
-        finally:
-            # Restore normal cursor
-            QApplication.restoreOverrideCursor()
-
-
-    def open_all_recent_files(self):
-        """Open all recent files (delayed to allow menu to close)"""
-        QTimer.singleShot(10, self._do_open_all_recent_files)
-
         
-    def _do_open_all_recent_files(self):
-        """Actual batch opening after menu has closed, with wait cursor"""
-        from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
-        from PyQt5.QtCore import Qt
-
-        if not hasattr(self.main_window, 'config_manager'):
-            return
-
-        recent_files = self.main_window.config_manager.get_recent_files()
-        if not recent_files:
-            QMessageBox.information(
-                self.main_window,
-                "No Recent Files",
-                "No recent files to open."
-            )
-            return
-
-        # Filter existing files
-        existing_files = [f for f in recent_files if os.path.exists(f)]
-        if not existing_files:
-            QMessageBox.information(
-                self.main_window,
-                "No Files Found",
-                "None of the recent files could be found."
-            )
-            return
-
-        if len(existing_files) > 5:
-            reply = QMessageBox.question(
-                self.main_window,
-                "Open Many Files",
-                f"This will open {len(existing_files)} files. Continue?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-        # --- Show wait cursor immediately ---
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
-
-        try:
-            # Progress dialog (only if many files)
-            progress = None
-            if len(existing_files) > 3:
-                progress = QProgressDialog(
-                    "Opening files...",
-                    "Cancel",
-                    0,
-                    len(existing_files),
-                    self.main_window
-                )
-                progress.setWindowTitle("Opening files, please wait...")
-                progress.setMinimumWidth(400)
-                progress.setWindowModality(Qt.WindowModal)
-                progress.show()
-
-            opened_count = 0
-            for i, file_path in enumerate(existing_files):
-                if progress and progress.wasCanceled():
-                    break
-                try:
-                    self.main_window.editor_manager.open_specific_file(file_path)
-                    opened_count += 1
-                    if progress:
-                        progress.setValue(i + 1)
-                        progress.setLabelText(f"Opened {os.path.basename(file_path)}")
-                        QApplication.processEvents()
-                except Exception as e:
-                    print(f"Error opening {file_path}: {e}")
-
-            if progress:
-                progress.close()
-
-            if opened_count > 0:
-                self.main_window.update_status_bar(f"Opened {opened_count} files")
-            else:
-                QMessageBox.warning(
-                    self.main_window,
-                    "Open Error",
-                    "Could not open any recent files."
-                )
-
-            self.update_recent_files_menu()
-        finally:
-            # Restore normal cursor after all files are opened
-            QApplication.restoreOverrideCursor()        
-
-    def clear_recent_files(self):
-        """Clear all recent files"""
-        from PyQt5.QtWidgets import QMessageBox
-        reply = QMessageBox.question(
-            self.main_window,
-            "Clear Recent Files",
-            "Are you sure you want to clear all recent files?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            if hasattr(self.main_window, 'config_manager'):
-                self.main_window.config_manager.clear_recent_files()
-            self.update_recent_files_menu()
-            # Refresh the editor welcome page immediately if it is currently showing
-            # (welcome page is visible only when no editor files are open)
-            em = self.main_window.editor_manager
-            if not getattr(em, 'editor_files', None):
-                lm = getattr(self.main_window, 'layout_manager', None)
-                if lm and hasattr(lm, '_safe_recreate_editor_container'):
-                    QTimer.singleShot(0, lm._safe_recreate_editor_container)
-
-    def get_current_editor_or_warn(self):
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]                            
-        
-        current_editor = self.main_window.editor_manager.get_current_editor()
-        current_file = self.main_window.editor_manager.get_current_file_path()
-        if not current_editor or not current_file:
-            self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
-            return None
-        return current_editor
-
-    def undo_current_editor(self):
-        editor = self.get_current_editor_or_warn()
-        if editor:
-            editor.undo()
-
-    def redo_current_editor(self):
-        editor = self.get_current_editor_or_warn()
-        if editor:
-            editor.redo()
-
-    def _create_edit_menu(self):
+    def _create_edit_actions(self):
+        """Create edit-related toolbar actions"""
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
-        edit_menu = self.main_window.menuBar().addMenu("&"+tr["edit_menu"])
-        # Undo
-        undo_action = QAction(tr["undo"], self.main_window)
-        undo_action.setShortcut("Ctrl+Z")
-        undo_action.setStatusTip(tr["undo"])   # ✅ Status tip
-        undo_action.triggered.connect(self.undo_current_editor)
-        self.icons_manager.apply_icon_to_action(undo_action, "undo")
-        edit_menu.addAction(undo_action)
-        # Redo
-        redo_action = QAction(tr["redo"], self.main_window)
-        redo_action.setShortcut("Ctrl+Y")
-        redo_action.setStatusTip(tr["redo"])   # ✅ Status tip
-        redo_action.triggered.connect(self.redo_current_editor)
-        self.icons_manager.apply_icon_to_action(redo_action, "redo")
-        edit_menu.addAction(redo_action)
-        edit_menu.addSeparator()
         # Cut, Copy, Paste
         for text, shortcut, icon, func in [
             ("cut", "Ctrl+X", "cut", "cut"),
@@ -873,1730 +247,2691 @@ class MenuManager:
         ]:
             action = QAction(tr[text], self.main_window)
             action.setShortcut(shortcut)
-            action.setStatusTip(tr[text])   # ✅ Status tip
+            #action.setToolTip(tr["tooltip_copy"])
             action.triggered.connect(
                 lambda checked, f=func: getattr(self.main_window.editor_manager.get_current_editor(), f, lambda: None)()
                 if self.main_window.editor_manager.get_current_editor() else None
             )
             self.icons_manager.apply_icon_to_action(action, icon)
-            edit_menu.addAction(action)
-        edit_menu.addSeparator()
-        # Go to Line
-        go_to_line_action = QAction(tr.get("go_to_line", "Go to Line...")+"\tCtrl+G", self.main_window)        
-        go_to_line_action.setToolTip(tr.get("tooltip_go_to_line", "Go to a specific line number"))
-        go_to_line_action.setStatusTip(tr.get("status_jump_to_line", "Jump to a specific line number in the current document"))
-        go_to_line_action.triggered.connect(self.main_window.editor_manager.go_to_line)
-        edit_menu.addAction(go_to_line_action)
-        # Add the action to the main window so it can be triggered globally
-        self.main_window.addAction(go_to_line_action)      
-        # Count the words in a selected text
-        word_count_action = QAction(tr["word_count"], self.main_window)
-        word_count_action.setStatusTip(tr["status_word_count"])
-        word_count_action.triggered.connect(
-            self.main_window.editor_manager.count_selected_words
-        )
-        edit_menu.addAction(word_count_action)        
-        # Count the characters (with and without spaces) in a selected text
-        character_count_action = QAction(tr.get("character_count", "Characters Count"), self.main_window)
-        character_count_action.setStatusTip(
-            tr.get("status_character_count", "Count characters (with and without spaces) in selected text")
-        )
-        character_count_action.triggered.connect(
-            self.main_window.editor_manager.count_selected_characters
-        )
-        edit_menu.addAction(character_count_action)
-        # Delete Auxiliary Files
-        delete_aux_action = QAction(
-            tr.get("delete_aux_files", "Delete Auxiliary Files...")+"\tCtrl+Shift+Del",
-            self.main_window
-        )        
-        delete_aux_action.setToolTip(
-            tr.get("tooltip_delete_aux_files", "Delete auxiliary files in the current document's directory")
-        )
-        delete_aux_action.setStatusTip(tr.get("status_delete_aux_files", "Remove .aux, .log, .out, etc. files generated by LaTeX"))
-        delete_aux_action.triggered.connect(self.main_window.editor_manager.delete_auxiliary_files)
-        edit_menu.addAction(delete_aux_action)
-        self.main_window.addAction(delete_aux_action) 
-        # Text Transformation menu
-        transform_menu = edit_menu.addMenu(tr["text_transform"])
-        edit_menu.addSeparator()        
-        # Add actions
-        lowercase_action = QAction(tr["lowercase"], self.main_window)
-        lowercase_action.setShortcut(QKeySequence("Ctrl+Down"))
-        lowercase_action.setStatusTip(tr["status_lowercase"])
-        lowercase_action.triggered.connect(self.main_window.editor_manager.transform_to_lowercase)
-        transform_menu.addAction(lowercase_action)
-        uppercase_action = QAction(tr["uppercase"], self.main_window)
-        uppercase_action.setShortcut(QKeySequence("Ctrl+Up"))
-        uppercase_action.setStatusTip(tr["status_uppercase"])
-        uppercase_action.triggered.connect(self.main_window.editor_manager.transform_to_uppercase)
-        transform_menu.addAction(uppercase_action)
-        title_case_action = QAction(tr["title_case"], self.main_window)
-        title_case_action.setStatusTip(tr["status_title_case"])
-        title_case_action.triggered.connect(self.main_window.editor_manager.transform_to_title_case)
-        transform_menu.addAction(title_case_action)
-        full_title_case_action = QAction(tr["full_title_case"], self.main_window)
-        full_title_case_action.setStatusTip(tr["status_full_title_case"])
-        full_title_case_action.triggered.connect(self.main_window.editor_manager.transform_to_full_title_case)
-        transform_menu.addAction(full_title_case_action)   
-        # Full title case can be without shortcut        
-        remove_indent_action = QAction(tr.get("remove_indent", "Remove Indent"), self.main_window)
-        remove_indent_action.setStatusTip(
-            tr.get("status_remove_indent", "Remove leading tabs/spaces from each selected line")
-        )
-        remove_indent_action.triggered.connect(self.main_window.editor_manager.remove_selected_indent)
-        transform_menu.addAction(remove_indent_action)
-        join_lines_action = QAction(tr.get("join_lines", "Join Lines"), self.main_window)
-        join_lines_action.setStatusTip(
-            tr.get("status_join_lines", "Join multiple selected lines into a single line")
-        )
-        join_lines_action.triggered.connect(self.main_window.editor_manager.join_selected_lines)
-        transform_menu.addAction(join_lines_action)
-        remove_blank_lines_action = QAction(tr.get("remove_blank_lines", "Remove Blank Lines"), self.main_window)
-        remove_blank_lines_action.setStatusTip(
-            tr.get("status_remove_blank_lines", "Remove blank (empty) lines from the selected text")
-        )
-        remove_blank_lines_action.triggered.connect(self.main_window.editor_manager.remove_selected_blank_lines)
-        transform_menu.addAction(remove_blank_lines_action)
-        comment_blank_lines_action = QAction(tr.get("comment_blank_lines", "Comment Blank Lines"), self.main_window)
-        comment_blank_lines_action.setStatusTip(
-            tr.get("status_comment_blank_lines", "Insert % into blank (empty) lines in the selected text")
-        )
-        comment_blank_lines_action.triggered.connect(self.main_window.editor_manager.comment_selected_blank_lines)
-        transform_menu.addAction(comment_blank_lines_action)
-        self.setup_latex_comment_menu(edit_menu)
-               
-        edit_menu.addSeparator()       
+            #self.main_toolbar.addAction(action)
         
-        # Spell Check submenu
-        spell_menu = edit_menu.addMenu(tr["spell_check"])
-
-        # Populate lazily on first open so SpellChecker is guaranteed to exist.
-        # _populated flag prevents rebuilding the submenu on every open.
-        def _populate_spell_menu_once():
-            if getattr(spell_menu, '_populated', False):
-                return
-            sc = getattr(self.main_window, 'spell_checker', None)
-            if sc is None:
-                return                        # still not ready — try again next open
-            self.add_spell_check_menu(spell_menu)
-            spell_menu._populated = True
-
-        spell_menu.aboutToShow.connect(_populate_spell_menu_once)
+        # Undo
+        undo_action = QAction(tr["undo"], self.main_window)
+        #undo_action.setShortcut("Ctrl+Z")
+        undo_action.setToolTip(tr["tooltip_undo"])
+        undo_action.triggered.connect(
+            lambda: (
+                self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+                if not (self.main_window.editor_manager.get_current_editor() and 
+                        self.main_window.editor_manager.get_current_file_path())
+                else self.main_window.editor_manager.get_current_editor().undo()
+            )
+        )
+        if lang == "ar":
+            self.icons_manager.apply_icon_to_action_mirrored(undo_action, "undo", self._get_icon_angle())
+        else:
+            self.icons_manager.apply_icon_to_action(undo_action, "undo")
+        self.main_toolbar.addAction(undo_action)
         
-        edit_menu.addSeparator()
-
+        # Redo
+        redo_action = QAction(tr["redo"], self.main_window)
+        #redo_action.setShortcut("Ctrl+Y")
+        redo_action.setToolTip(tr["tooltip_redo"])
+        redo_action.triggered.connect(
+            lambda: (
+                self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+                if not (self.main_window.editor_manager.get_current_editor() and 
+                        self.main_window.editor_manager.get_current_file_path())
+                else self.main_window.editor_manager.get_current_editor().redo()
+            )
+        )
+        if lang == "ar":
+            self.icons_manager.apply_icon_to_action_mirrored(redo_action, "redo", self._get_icon_angle())
+        else:
+            self.icons_manager.apply_icon_to_action(redo_action, "redo")
+        self.main_toolbar.addAction(redo_action)
+        
         # Find / Replace
         find_action = QAction(tr.get("find", "Find"), self.main_window)
-        find_action.setShortcut("Ctrl+F")
-        find_action.setStatusTip(tr.get("status_find", "Find text in the current document"))
+        #find_action.setShortcut("Ctrl+F")
         find_action.triggered.connect(self.main_window.show_find_dialog)
         self.icons_manager.apply_icon_to_action(find_action, "find")
-        edit_menu.addAction(find_action)
-        replace_action = QAction(tr.get("replace", "Replace"), self.main_window)
-        replace_action.setShortcut("Ctrl+H")
-        replace_action.setStatusTip(tr.get("status_replace", "Find and replace text"))
-        replace_action.triggered.connect(self.main_window.show_replace_dialog)
-        edit_menu.addAction(replace_action)
-        find_next_action = QAction(tr.get("find_next", "Find Next"), self.main_window)
-        find_next_action.setShortcut("F3")
-        find_next_action.setStatusTip(tr.get("status_find_next", "Find the next occurrence"))
-        find_next_action.triggered.connect(self.main_window.find_next)
-        edit_menu.addAction(find_next_action)
-        find_previous_action = QAction(tr.get("find_previous", "Find Previous"), self.main_window)
-        find_previous_action.setShortcut("Shift+F3")
-        find_previous_action.setStatusTip(tr.get("status_find_previous", "Find the previous occurrence"))
-        find_previous_action.triggered.connect(self.main_window.find_previous)
-        edit_menu.addAction(find_previous_action)
-        
-        self._setup_menu_close_protection()
-
-
-    def add_spell_check_menu(self, tools_menu):
-        """Add spell check options to an existing Tools/Spell Check menu"""
+        self.main_toolbar.addAction(find_action)
+            
+    def _create_latex_actions(self):
+        """Create LaTeX-related toolbar actions with unified compile/stop button"""
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
-
-        # Guard: spell checker may not be ready yet if the menu is built
-        # before _init_spell_checker fires.
-        if not hasattr(self.main_window, 'spell_checker') \
-                or self.main_window.spell_checker is None:
-            return
-
-        spell_checker = self.main_window.spell_checker
-
-        # ── Language submenu ──────────────────────────────────────────────
-        lang_menu = tools_menu.addMenu(tr.get("spell_check_language", "Spell checking language"))
-
-        arabic_action = QAction(tr["arabic"], self.main_window)
-        arabic_action.setCheckable(True)
-        self._make_rtl_checkable(arabic_action)
-        arabic_action.setStatusTip(tr["tooltip_load_arabic_dictionary"])
-        arabic_action.triggered.connect(lambda: self._set_spell_language('ar'))
-        lang_menu.addAction(arabic_action)
-
-
-        english_action = QAction(tr["english"], self.main_window)
-        english_action.setCheckable(True)
-        self._make_rtl_checkable(english_action)
-        english_action.setStatusTip(tr["tooltip_load_englsih_dictionary"])
-        english_action.triggered.connect(lambda: self._set_spell_language('en'))
-        lang_menu.addAction(english_action)
-
-
-        # Keep check marks in sync when menu opens
-        def update_lang_checks():
-            active = getattr(spell_checker, 'active_language', None)
-            enabled = getattr(spell_checker, 'enabled', False)
-            english_action.setChecked(enabled and active == 'en')
-            arabic_action.setChecked(enabled and active == 'ar')
-
-        lang_menu.aboutToShow.connect(update_lang_checks)
-        tools_menu.aboutToShow.connect(update_lang_checks)
-
-        tools_menu.addSeparator()
-
-        # ── Disable spell check ───────────────────────────────────────────
-        disable_action = QAction(tr.get("disable_spell_check", "Disable spell check"), self.main_window)
-        disable_action.setStatusTip(tr["tooltip_turn_off_spell_checking"])
-        disable_action.triggered.connect(self._disable_spell_check)
-        disable_action.setEnabled(False) 
-        tools_menu.addAction(disable_action)
-
-        # Keep disable action enabled only when spell check is active
-        tools_menu.aboutToShow.connect(
-            lambda: disable_action.setEnabled(getattr(spell_checker, 'enabled', False))
+        #print(f"DEBUG _create_latex_actions lang={lang}, refresh_pdf={tr.get('refresh_pdf')}")
+        # Create unified compile/stop toggle action
+        self.compile_action = QAction(self.main_window.latex_engine, self.main_window)
+        #self.compile_action.setShortcut("F5")
+        self.compile_action.setToolTip(
+            tr["tooltip_compile"].format(self.main_window.latex_engine)
         )
-
-        tools_menu.addSeparator()
-
-        # ── Dictionary statistics (unchanged) ────────────────────────────
-        info_action = QAction(tr["dictionary_statistics"], self.main_window)
-        info_action.setStatusTip(tr["status_dictionary_statistics"])
-
-        def show_dict_info():
-            if not getattr(spell_checker, 'dictionaries_loaded', False):
-                QMessageBox.information(
-                    self.main_window,
-                    "Dictionary Statistics",
-                    "No dictionary loaded yet.\n\nSelect a language to enable spell check."
-                )
-                return
-            stats = spell_checker.get_dictionary_stats()
-            info = []
-            total_words = 0
-            for lang_key, count in stats.items():
-                info.append(f"{lang_key.upper()}: {count:,} words")
-                total_words += count
-            if hasattr(spell_checker, 'personal_words') and spell_checker.personal_words:
-                info.append(f"Personal: {len(spell_checker.personal_words)} words")
-            info.append(f"\nTotal: {total_words:,} words")
-            if hasattr(spell_checker, 'word_sets'):
-                cached_words = sum(len(w) for w in spell_checker.word_sets.values())
-                info.append(f"Memory usage: {cached_words:,} words in dictionary")
-            if hasattr(spell_checker, '_suggestion_cache'):
-                info.append(f"Suggestion cache: {len(spell_checker._suggestion_cache):,} entries")
-            active = getattr(spell_checker, 'active_language', None)
-            enabled = getattr(spell_checker, 'enabled', False)
-            status = f"{'Enabled' if enabled else 'Disabled'}"
-            if enabled and active:
-                status += f" ({active.upper()})"
-            info.append(f"\nStatus: {status}")
-            QMessageBox.information(
-                self.main_window, "Dictionary Statistics", "\n".join(info)
-            )
-
-        info_action.triggered.connect(show_dict_info)
-        tools_menu.addAction(info_action)
-
-    def _set_spell_language(self, lang):
-        sc = getattr(self.main_window, 'spell_checker', None)
-        if sc is None:
-            return
-        sc.set_language(lang)
-
-
-    
-    def _disable_spell_check(self):
-        sc = getattr(self.main_window, 'spell_checker', None)
-        if sc is None or not sc.enabled:
-            return
-        sc._disable_all("Spell check disabled")
-
-
-
-    # Menu setup functions
-    def setup_latex_comment_menu(self, edit_menu):
-        """Add comment/uncomment actions to the Edit menu"""
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]
-        # Comment action
-        comment_action = QAction(tr["comment"], self.main_window)
-        comment_action.setShortcut(QKeySequence("Ctrl+/"))
-        comment_action.setToolTip(tr["tooltip_comment_selected_lines"])
-        comment_action.setStatusTip(tr["status_comment"])
-        comment_action.triggered.connect(self.main_window.editor_manager.comment_latex_lines)
-        edit_menu.addAction(comment_action)
-        # Uncomment action  
-        uncomment_action = QAction(tr["uncomment"], self.main_window)
-        uncomment_action.setShortcut(QKeySequence("Ctrl+Shift+/"))
-        uncomment_action.setToolTip(tr["tooltip_remove_comments_from_selected_lines"])
-        uncomment_action.setStatusTip(tr["status_uncomment"])
-        uncomment_action.triggered.connect(self.main_window.editor_manager.uncomment_latex_lines)
-        edit_menu.addAction(uncomment_action)
-        # Toggle comment action (most common)
-        toggle_action = QAction(tr["toggle_comments"], self.main_window)
-        toggle_action.setShortcut(QKeySequence("Ctrl+D"))
-        toggle_action.setToolTip(tr["tooltip_toggle_comments_on_selected_lines"])
-        toggle_action.setStatusTip(tr["status_toggle_comments"])
-        toggle_action.triggered.connect(self.main_window.editor_manager.toggle_latex_comments)
-        edit_menu.addAction(toggle_action)
-
-    # Alternative: Context menu integration
-    def setup_latex_comment_context_menu(self, context_menu):
-        """Add comment/uncomment actions to the editor context menu"""
-        context_menu.addSeparator()
-        # Toggle comment (most used)
-        toggle_action = QAction("Toggle Comments (Ctrl+D)", self.main_window)
-        toggle_action.triggered.connect(self.main_window.editor_manager.toggle_latex_comments)
-        context_menu.addAction(toggle_action)
-        # Individual comment/uncomment
-        comment_action = QAction("Comment Lines (Ctrl+/)", self.main_window)
-        comment_action.triggered.connect(self.main_window.editor_manager.comment_latex_lines)
-        context_menu.addAction(comment_action)
-        uncomment_action = QAction("Uncomment Lines (Ctrl+Shift+/)", self.main_window)
-        uncomment_action.triggered.connect(self.main_window.editor_manager.uncomment_latex_lines)
-        context_menu.addAction(uncomment_action)
-
-    def _create_view_menu(self): 
-        """Create view menu with proper output toggle functionality"""
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]
-        view_menu = self.main_window.menuBar().addMenu("&"+tr["view_menu"])
-        # Toggle visibility
-        self.toggle_visibility_action = QAction(tr["show_hide_side_panel"], self.main_window)  
-        self.toggle_visibility_action.setStatusTip(tr["status_show_hide_side_panel"])        
-        self.toggle_visibility_action.setShortcut("F9")
-        self.toggle_visibility_action.setCheckable(True)
-        self.toggle_visibility_action.setChecked(True)  # Toolbar visible by default
-        self._make_rtl_checkable(self.toggle_visibility_action)
-        self.toggle_visibility_action.setToolTip(tr["tooltip_toggle_side_panel_visibility"])
         
-        self.toggle_visibility_action.toggled.connect(self.main_window.set_side_panel_visible)
-        view_menu.addAction(self.toggle_visibility_action)
-        # ✅ ADD THIS - Show/Hide Main Toolbar
-        toggle_toolbar_action = QAction(
-            tr.get("toggle_main_toolbar", "Show/Hide Main Toolbar"), 
-            self.main_window
-        )
-        toggle_toolbar_action.setShortcut("F10")  # F10 to toggle
-        toggle_toolbar_action.setCheckable(True)
-        toggle_toolbar_action.setChecked(True)  # Toolbar visible by default
-        self._make_rtl_checkable(toggle_toolbar_action)            
-        toggle_toolbar_action.setToolTip(tr["tooltip_toggle_main_toolbar_visibility"])
-        toggle_toolbar_action.setStatusTip(tr.get("status_toggle_main_toolbar", "Show or hide the main toolbar"))
-        toggle_toolbar_action.triggered.connect(self.toggle_main_toolbar)
-        view_menu.addAction(toggle_toolbar_action)
-        # Store reference for state updates
-        self.main_window.toggle_toolbar_action = toggle_toolbar_action
-        # ✅ ADD THIS - Show/Hide Menu Bar
-        toggle_menubar_action = QAction(tr.get("toggle_menubar", "Show/Hide Menu Bar"), self.main_window)
-        toggle_menubar_action.setShortcut("F11")  # F11 to toggle (common shortcut)
-        toggle_menubar_action.setCheckable(True)
-        toggle_menubar_action.setChecked(True)  # Menu bar visible by default
-        self._make_rtl_checkable(toggle_menubar_action)            
-        toggle_menubar_action.setToolTip(tr["tooltip_toggle_menu_bar_visibility"])
-        toggle_menubar_action.setStatusTip(tr.get("status_toggle_menubar", "Show or hide the menu bar"))
-        toggle_menubar_action.triggered.connect(self.toggle_menu_bar)
-        view_menu.addAction(toggle_menubar_action)
-        # Store reference for state updates
-        self.main_window.toggle_menubar_action = toggle_menubar_action
-        # Toggle Full/Normal Screen Mode
-        full_screen_action =  QAction(tr["full_screen"], self.main_window)
-        full_screen_action.setShortcut("F12")
-        full_screen_action.setCheckable(True)
-        full_screen_action.setChecked(False)
-        self._make_rtl_checkable(full_screen_action)               
-        full_screen_action.setStatusTip(tr["status_full_screen"])
-        full_screen_action.triggered.connect(lambda checked: self.toggle_fullscreen(checked))
-        view_menu.addAction(full_screen_action)
-        # ======================================================
-        # ✅ NEW ITEM 3: Show/Hide Toolbar Button Text
-        # ======================================================
-        toolbar_text_visible = getattr(self.main_window, '_toolbar_text_visible', True)
-        self.toggle_toolbar_text_action = QAction(
-            tr.get("toggle_toolbar_text", "Show Toolbar Button Text"),
-            self.main_window
-        )
-        self.toggle_toolbar_text_action.setCheckable(True)
-        self._make_rtl_checkable(self.toggle_toolbar_text_action)
-        self.toggle_toolbar_text_action.setChecked(toolbar_text_visible)
-        self.toggle_toolbar_text_action.setToolTip(tr["tooltip_show_or_hide_text_labels_under_toolbar_icons"])
-        self.toggle_toolbar_text_action.setStatusTip(tr.get("status_toggle_toolbar_text", "Display text under toolbar icons"))
-        self.toggle_toolbar_text_action.triggered.connect(self.toggle_toolbar_button_text)
-        view_menu.addAction(self.toggle_toolbar_text_action)
-        # ======================================================
-        # ✅ NEW ITEM 4: Show/Hide Tooltips
-        # ======================================================
-        tooltips_visible = getattr(self.main_window, '_tooltips_visible', True)
-        self.toggle_tooltips_action = QAction(
-            tr.get("toggle_tooltips", "Show Tooltips"),
-            self.main_window
-        )
-        self.toggle_tooltips_action.setCheckable(True)
-        self._make_rtl_checkable(self.toggle_tooltips_action)
-        self.toggle_tooltips_action.setChecked(tooltips_visible)
-        self.toggle_tooltips_action.setToolTip(tr["tooltip_show_or_hide_all_tooltips"])
-        self.toggle_tooltips_action.setStatusTip(tr.get("status_toggle_tooltips", "Enable or disable all tooltip popups"))
-        self.toggle_tooltips_action.triggered.connect(self.toggle_tooltips)
-        view_menu.addAction(self.toggle_tooltips_action)
-        view_menu.addSeparator()
-        # Show/Hide PDF Toolbar
-        self.toggle_pdf_toolbar_action = QAction(tr["show_pdf_toolbar"], self.main_window)
-        self.toggle_pdf_toolbar_action.setShortcut("Ctrl+F7")
-        self.toggle_pdf_toolbar_action.setCheckable(True)
-        self.toggle_pdf_toolbar_action.setChecked(True)  # Default: toolbars visible
-        self._make_rtl_checkable(self.toggle_pdf_toolbar_action)
-        self.toggle_pdf_toolbar_action.setStatusTip(tr["status_show_pdf_toolbar"])
-        self.toggle_pdf_toolbar_action.triggered.connect(self.main_window.toggle_pdf_toolbars)
-        view_menu.addAction(self.toggle_pdf_toolbar_action)
-        # Store reference for updating state
-        self.main_window.menu_pdf_toolbar_toggle_action = self.toggle_pdf_toolbar_action
-
-        # Show/Hide DjVu Toolbar
-        toggle_djvu_toolbar_action = QAction(tr.get("show_djvu_toolbar", "Show DjVu Toolbar"), self.main_window)
-        toggle_djvu_toolbar_action.setShortcut("Ctrl+F8")   # different shortcut
-        toggle_djvu_toolbar_action.setCheckable(True)
-        toggle_djvu_toolbar_action.setChecked(True)   # default visible
-        self._make_rtl_checkable(toggle_djvu_toolbar_action)
-        toggle_djvu_toolbar_action.setStatusTip(tr.get("status_show_djvu_toolbar", "Show/hide DjVu viewer toolbar"))
-        toggle_djvu_toolbar_action.triggered.connect(self.main_window.toggle_djvu_toolbar)
-        view_menu.addAction(toggle_djvu_toolbar_action)
-        # Store reference
-        self.main_window.menu_djvu_toolbar_toggle_action = toggle_djvu_toolbar_action        
-        # === LINE NUMBERS TOGGLE ===
-        self.line_numbers_action = QAction(tr["show_line_numbers"], self.main_window)
-        self.line_numbers_action.setCheckable(True)
-        initial_line = getattr(self.main_window, 'is_line_numbers_visible', True)
-        self._make_rtl_checkable(self.line_numbers_action)        
-        self.line_numbers_action.setChecked(initial_line)
-        self.line_numbers_action.setStatusTip(tr["status_show_line_numbers"])
-        self.line_numbers_action.triggered.connect(lambda checked: self.toggle_line_numbers(checked))
-        view_menu.addAction(self.line_numbers_action)
-        # === FOLD MARKERS TOGGLE ===
-        self.fold_markers_action = QAction(tr["show_fold_markers"], self.main_window)
-        self.fold_markers_action.setCheckable(True)
-        initial_fold = getattr(self.main_window, 'is_fold_markers_visible', True)
-        self._make_rtl_checkable(self.fold_markers_action)
-        self.fold_markers_action.setChecked(initial_fold)
-        self.fold_markers_action.setStatusTip(tr["status_show_fold_markers"])
-        self.fold_markers_action.triggered.connect(lambda checked: self.toggle_fold_markers(checked))
-        view_menu.addAction(self.fold_markers_action)
-        
-        view_menu.addSeparator()
-        # Side panel controls
-        side_panel_menu = QMenu("Side Panel", self.main_window)
-        # Toggle position
-        toggle_position_action = QAction(tr["switch_side_panel"], self.main_window)
-        toggle_position_action.setShortcut("Ctrl+F9")
-        toggle_position_action.setToolTip(tr["tooltip_switch_side_panel"])
-        toggle_position_action.setStatusTip(tr["status_switch_side_panel"])
-        toggle_position_action.triggered.connect(self.main_window.toggle_side_panel_position)
-        self.icons_manager.apply_icon_to_action(toggle_position_action, "switch_side_panel")
-        view_menu.addAction(toggle_position_action)
-        # Reset to default
-        reset_default_action = QAction(tr["reset_side_panel_to_default"], self.main_window)
-        reset_default_action.setStatusTip(tr["reset_side_panel_to_default"])
-        reset_default_action.triggered.connect(self.main_window.reset_side_panel_to_default)
-        view_menu.addAction(reset_default_action)
-        # Editor layout action
-        editor_layout_action = QAction(tr["tab_tex"], self.main_window)
-        editor_layout_action.setShortcut("Ctrl+F10")
-        editor_layout_action.setStatusTip(tr["status_tab_tex"])
-        editor_layout_action.triggered.connect(self.main_window.layout_manager.toggle_editor_layout)
-        self.icons_manager.apply_icon_to_action(editor_layout_action, "editor_layout")
-        view_menu.addAction(editor_layout_action)
-        # PDF layout action
-        pdf_layout_action = QAction(tr["tab_pdf"], self.main_window)
-        pdf_layout_action.setShortcut("Ctrl+F11")
-        pdf_layout_action.setStatusTip(tr["status_tab_pdf"])
-        pdf_layout_action.triggered.connect(self.main_window.layout_manager.toggle_pdf_layout)
-        self.icons_manager.apply_icon_to_action(pdf_layout_action, "pdf_layout")
-        view_menu.addAction(pdf_layout_action)
-        # Switch Layout
-        switch_layout_action = QAction(tr["switch_layout"], self.main_window)
-        switch_layout_action.setShortcut("Ctrl+F12")
-        switch_layout_action.setToolTip(tr["tooltip_switch_layout"])
-        switch_layout_action.setStatusTip(tr["status_switch_layout"])
-        switch_layout_action.triggered.connect(self.main_window.toolbar_manager.handle_switch_layout)
-        self.icons_manager.apply_icon_to_action(switch_layout_action, "switch_layout")
-        view_menu.addAction(switch_layout_action)
-        view_menu.addSeparator()
-        # Expand Editor to Full Width
-        expand_editor_action = QAction(tr["expand_editor_to_full_width"], self.main_window)
-        expand_editor_action.setShortcut("Ctrl+Shift+F9") 
-        expand_editor_action.setStatusTip(tr["status_expand_editor_to_full_width"])
-        expand_editor_action.triggered.connect(self.main_window.toggle_editor_expand_width)
-        view_menu.addAction(expand_editor_action)
-        # Expand PDF to Full Width
-        expand_pdf_action = QAction(tr["expand_pdf_to_full_width"], self.main_window)
-        expand_pdf_action.setShortcut("Ctrl+Shift+F10")  
-        expand_pdf_action.setStatusTip(tr["status_expand_pdf_to_full_width"])
-        expand_pdf_action.triggered.connect(self.main_window.toggle_pdf_expand_width)        
-        view_menu.addAction(expand_pdf_action)
-        # Split Window (Balanced View)
-        split_window_action = QAction(tr["split_window"], self.main_window)
-        split_window_action.setShortcut("Ctrl+Shift+F11") 
-        split_window_action.setStatusTip(tr["status_split_window"])
-        split_window_action.triggered.connect(self.main_window.split_window_width)
-        view_menu.addAction(split_window_action)
-        # Output toggle action - FIXED
-        output_toggle_action = QAction("", self.main_window)
-        output_toggle_action.setShortcut("Ctrl+Shift+F12")
-        output_toggle_action.triggered.connect(self._handle_output_toggle)        
-        output_toggle_action.toggled.connect(lambda checked: self.main_window.toggle_output_tabs(force_state=checked))
-        view_menu.addAction(output_toggle_action)
-        # Store reference for updates
-        self.main_window.menu_output_toggle_action = output_toggle_action
-        self._update_output_toggle_action()        
-        view_menu.addSeparator()
-        # Folding submenu
-        self.folding_menu = self._create_folding_menu(view_menu)
-        self.folding_menu.setEnabled(initial_fold)
-        
-        self._setup_menu_close_protection()
-
-
-    def toggle_toolbar_button_text(self, checked):
-        """Toggle text labels under toolbar buttons"""
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]
-        toolbar = getattr(self.main_window.toolbar_manager, 'main_toolbar', None)
-        if not toolbar:
-            return
-        self.main_window._toolbar_text_visible = checked
-        if checked:
-            toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        # Connect to our unified handler instead of directly to compilation_manager
+        self.compile_action.triggered.connect(self.handle_compile_action)        
+        #self.icons_manager.apply_icon_to_action(self.compile_action, "compile")
+        if lang == "ar":
+            self.icons_manager.apply_icon_to_action_mirrored(self.compile_action, "compile", self._get_icon_angle())
         else:
-            toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        # Save to config
-        if hasattr(self.main_window, 'config_manager'):
-            self.main_window.config_manager.set_config_value(
-                'ui', 'toolbar_text_visible', str(checked)
-            )
-            self.main_window.config_manager.save_config()
-        status = "shown" if checked else "hidden"
-        if hasattr(self.main_window, 'statusBar'):
-            #self.main_window.statusBar().showMessage(f"Toolbar button text {status}", 2000)
-            self.main_window.update_status_bar(
-                tr.get("status_toolbar_button_text", "Toolbar button text {status}").format(status=status)
-            )
-            QTimer.singleShot(
-                2000,
-                lambda: self.main_window.update_status_bar(tr.get("status_ready", "Ready"))
-            )                                                    
-
-    def toggle_tooltips(self, checked):
-        """Toggle all tooltips on or off using an event filter"""
-        self.main_window._tooltips_visible = checked
-        app = QApplication.instance()
-        if checked:
-            # Remove the tooltip blocker if installed
-            if hasattr(self.main_window, '_tooltip_filter'):
-                app.removeEventFilter(self.main_window._tooltip_filter)
-                del self.main_window._tooltip_filter
-        else:
-            # Install event filter that blocks all ToolTip events
-            if not hasattr(self.main_window, '_tooltip_filter'):
-                self.main_window._tooltip_filter = TooltipBlockFilter(self.main_window)
-            app.installEventFilter(self.main_window._tooltip_filter)
-        # Save to config
-        if hasattr(self.main_window, 'config_manager'):
-            self.main_window.config_manager.set_config_value(
-                'ui', 'tooltips_visible', str(checked)
-            )
-            self.main_window.config_manager.save_config()
-        status = "enabled" if checked else "disabled"
-        if hasattr(self.main_window, 'statusBar'):
-            self.main_window.statusBar().showMessage(f"Tooltips {status}", 2000)
-
-    def toggle_fold_markers(self, checked=None):
-        """Toggle fold markers visibility"""
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]
-        # If called without argument, toggle current state
-        if checked is None:
-            checked = not getattr(self.main_window, 'is_fold_markers_visible', True)
-        # Convert to bool
-        checked = bool(checked) if not isinstance(checked, bool) else checked
-        if isinstance(checked, int):
-            checked = (checked != 0)
-        #print(f"toggle_fold_markers: setting to {checked}")
-        # Update main_window state
-        self.main_window.is_fold_markers_visible = checked
-        # Update menu checkbox
-        if hasattr(self, 'fold_markers_action'):
-            self.fold_markers_action.blockSignals(True)
-            self.fold_markers_action.setChecked(checked)
-            self.fold_markers_action.blockSignals(False)
-        # Enable/disable folding menu
-        if hasattr(self, 'folding_menu'):
-            self.folding_menu.setEnabled(checked)
-        # Apply to all editors
-        if hasattr(self.main_window, 'editor_manager'):
-            if hasattr(self.main_window.editor_manager, 'get_all_editors'):
-                for editor in self.main_window.editor_manager.get_all_editors():
-                    if hasattr(editor, 'set_fold_markers_visible'):
-                        editor.set_fold_markers_visible(checked)
-            else:
-                editor = self.main_window.editor_manager.get_current_editor()
-                if editor and hasattr(editor, 'set_fold_markers_visible'):
-                    editor.set_fold_markers_visible(checked)
-        # Save to config
-        if hasattr(self.main_window, 'config_manager'):
-            self.main_window.config_manager.set_config_value('ui', 'is_fold_markers_visible', str(checked))
-            self.main_window.config_manager.save_config()
-        # Status message
-        if hasattr(self.main_window, 'statusBar'):
-            status = "shown" if checked else "hidden"
-            self.main_window.update_status_bar(f"Fold markers {status}", 2000)
-            QTimer.singleShot(
-                2000,
-                lambda: self.main_window.update_status_bar(
-                    tr.get("status_ready", "Ready"),
-                    timeout=0
-                )
-            )            
-
-    def _create_folding_menu(self, view_menu):
-        """Create code folding submenu"""   
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]        
-        folding_menu = view_menu.addMenu(tr["folding"])
-        # Fold current
-        fold_action = QAction(tr["fold_current_section"], self.main_window)
-        fold_action.setShortcut("Ctrl+*")
-        fold_action.setStatusTip(tr["status_fold_current_section"])
-        fold_action.triggered.connect(self.main_window.editor_manager.fold_current_section)
-        folding_menu.addAction(fold_action)
-        # Unfold current
-        unfold_action = QAction(tr["unfold_current_section"], self.main_window)
-        unfold_action.setShortcut("Ctrl+Shift+*")
-        unfold_action.setStatusTip(tr["status_unfold_current_section"])
-        unfold_action.triggered.connect(self.main_window.editor_manager.unfold_current_section)
-        folding_menu.addAction(unfold_action)
-        folding_menu.addSeparator()
-        # Fold all
-        fold_all_action = QAction(tr["fold_all"], self.main_window)
-        fold_all_action.setShortcut("Ctrl+Shift++")
-        fold_all_action.setStatusTip(tr["status_fold_all"])
-        fold_all_action.triggered.connect(self.main_window.editor_manager.fold_all_sections)
-        folding_menu.addAction(fold_all_action)
-        # Unfold all
-        unfold_all_action = QAction(tr["unfold_all"], self.main_window)
-        unfold_all_action.setShortcut("Ctrl+Shift+-")
-        unfold_all_action.setStatusTip(tr["status_unfold_all"])
-        unfold_all_action.triggered.connect(self.main_window.editor_manager.unfold_all_sections)
-        folding_menu.addAction(unfold_all_action)
-        folding_menu.addSeparator()
-        # Fold by level submenu
-        level_menu = folding_menu.addMenu(tr["fold_to_level"])
-        levels = [
-            ("Parts", 0),
-            ("Chapters", 1),
-            ("Sections", 2),
-            ("Subsections", 3),
-            ("Subsubsections", 4),
-        ]
-        for name, level in levels:
-            text = tr["fold_below"].format(name)
-            action = QAction(text, self.main_window)
-            action.setStatusTip(tr["status_fold_to_level"].format(name))
-            action.triggered.connect(lambda checked, lvl=level: self.main_window.editor_manager.fold_to_level(lvl))
-            level_menu.addAction(action)
-        return folding_menu
+            self.icons_manager.apply_icon_to_action(self.compile_action, "compile")
         
-        self._setup_menu_close_protection()
-
-
-    def toggle_fullscreen(self, checked):
-        if checked:
-            self.main_window.showFullScreen()
-        else:
-            self.main_window.showMaximized()
-
-    def toggle_line_numbers(self, checked=None):
-        """Toggle line numbers visibility"""
-        # If called without argument, toggle current state
-        if checked is None:
-            checked = not getattr(self.main_window, 'is_line_numbers_visible', True)
-        # Convert to bool (handles int from stateChanged)
-        checked = bool(checked) if not isinstance(checked, bool) else checked
-        if isinstance(checked, int):
-            checked = (checked != 0)
-        #print(f"toggle_line_numbers: setting to {checked}")
-        # Update main_window state
-        self.main_window.is_line_numbers_visible = checked
-        # Update menu checkbox
-        if hasattr(self, 'line_numbers_action'):
-            self.line_numbers_action.blockSignals(True)
-            self.line_numbers_action.setChecked(checked)
-            self.line_numbers_action.blockSignals(False)
-        # Apply to all editors
-        if hasattr(self.main_window, 'editor_manager'):
-            if hasattr(self.main_window.editor_manager, 'get_all_editors'):
-                for editor in self.main_window.editor_manager.get_all_editors():
-                    if hasattr(editor, 'set_line_numbers_visible'):
-                        editor.set_line_numbers_visible(checked)
-            else:
-                # Fallback: just current editor
-                editor = self.main_window.editor_manager.get_current_editor()
-                if editor and hasattr(editor, 'set_line_numbers_visible'):
-                    editor.set_line_numbers_visible(checked)
-        # Save to config
-        if hasattr(self.main_window, 'config_manager'):
-            self.main_window.config_manager.set_config_value('ui', 'is_line_numbers_visible', str(checked))
-            self.main_window.config_manager.save_config()
-        # Status message
-        if hasattr(self.main_window, 'statusBar'):
-            status = "shown" if checked else "hidden"
-            self.main_window.statusBar().showMessage(f"Line numbers {status}", 2000)
-
-    def toggle_menu_bar(self):
-        """Toggle menu bar visibility"""
-        menu_bar = self.main_window.menuBar()
-        current_state = menu_bar.isVisible()
-        new_state = not current_state
-        # Toggle visibility
-        menu_bar.setVisible(new_state)
-        # Update action checked state
-        if hasattr(self.main_window, 'toggle_menubar_action'):
-            self.main_window.toggle_menubar_action.setChecked(new_state)
-        # Update status bar
-        status_msg = "Menu bar shown" if new_state else "Menu bar hidden (press F11 to show)"
-        if hasattr(self.main_window, 'update_status_bar'):
-            self.main_window.update_status_bar(status_msg)
-        # Save state to config
-        if hasattr(self.main_window, 'config_manager'):
-            try:
-                self.main_window.config_manager.set_config_value('ui', 'menubar_visible', new_state)
-            except:
-                pass
-
-    def toggle_main_toolbar(self):
-        """Toggle main toolbar visibility"""
-        # Get toolbar from toolbar manager
-        if not hasattr(self.main_window, 'toolbar_manager') or not self.main_window.toolbar_manager:
-            return
-        toolbar = self.main_window.toolbar_manager.main_toolbar
-        if not toolbar:
-            return
-        # Toggle visibility
-        current_state = toolbar.isVisible()
-        new_state = not current_state
-        toolbar.setVisible(new_state)
-        # Update action checked state
-        if hasattr(self.main_window, 'toggle_toolbar_action'):
-            self.main_window.toggle_toolbar_action.setChecked(new_state)
-        # Update status bar
-        status_msg = "Main toolbar shown" if new_state else "Main toolbar hidden (press F12 to show)"
-        if hasattr(self.main_window, 'update_status_bar'):
-            self.main_window.update_status_bar(status_msg)
-        # Save state to config
-        if hasattr(self.main_window, 'config_manager'):
-            try:
-                self.main_window.config_manager.set_config_value('ui', 'main_toolbar_visible', new_state)
-            except:
-                pass
-
-    def _create_tools_menu(self):         
-        """Create tools menu"""
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]
-        tools_menu = self.main_window.menuBar().addMenu("&"+tr["tools_menu"])
-        # Tool 1: Latex Document Wizard
-        latex_wizard_action = QAction(tr["latex_document_wizard"], self.main_window) 
-        icon = QIcon("icons/wizard.svg")
-        latex_wizard_action.setIcon(icon)          
-        latex_wizard_action.setShortcut("Ctrl+W")
-        latex_wizard_action.setStatusTip(tr["status_latex_document_wizard"])
-        latex_wizard_action.triggered.connect(self.main_window.open_latex_wizard_tab) 
-        tools_menu.addAction(latex_wizard_action)
-        tools_menu.addSeparator()
-        # Tool 2: Bibitex Manager
-        bibtex_manager_action = QAction(tr["bibtex_manager"], self.main_window) 
-        icon = QIcon("icons/bibtex.svg")
-        bibtex_manager_action.setIcon(icon)                  
-        bibtex_manager_action.setShortcut("Ctrl+M")
-        bibtex_manager_action.setStatusTip(tr["status_bibtex_manager"])
-        bibtex_manager_action.triggered.connect(self.main_window.open_bibtex_manager_tab) 
-        tools_menu.addAction(bibtex_manager_action)
-        tools_menu.addSeparator()
-        # Tool 2: Calculator + Calendar 
-        tools_tab_action = QAction(tr["tools_tab"], self.main_window)
-        icon = QIcon("icons/accessories.svg")
-        tools_tab_action.setIcon(icon)  
-        tools_tab_action.setShortcut("Ctrl+T")
-        tools_tab_action.setStatusTip(tr["status_tools_tab"])
-        tools_tab_action.triggered.connect(self.main_window.open_tools_tab)
-        tools_menu.addAction(tools_tab_action)
-        tools_menu.addSeparator()
-        # Tool 4: Knowledge Database Manager
-        knowledge_db_action = QAction(tr.get("knowledge_database", "Knowledge Database"), self.main_window)
-        icon = QIcon("icons/database.svg")
-        knowledge_db_action.setIcon(icon)
-        knowledge_db_action.setShortcut("Ctrl+K")
-        knowledge_db_action.setStatusTip(tr["status_knowledge_database"])
-        knowledge_db_action.triggered.connect(self.main_window.open_knowledge_database)
-        tools_menu.addAction(knowledge_db_action)
-        tools_menu.addSeparator()
+        self.main_window.toolbar_compile_action = self.compile_action  # For backward compatibility
+        self.main_toolbar.addAction(self.compile_action)
+        
+        # Create hidden stop action for compatibility with existing update_compile_actions
+        self.stop_action = QAction("Stop", self.main_window)
+        self.stop_action.setVisible(False)  # Hidden, just for compatibility
+        self.main_window.toolbar_stop_action = self.stop_action
+        
+        # ✅ Get the actual QToolButton and fix its size
+        self.compile_button = self.main_toolbar.widgetForAction(self.compile_action)
+        if self.compile_button:
+            self.compile_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.compile_button.setMinimumWidth(80)  # Wider to fit engine names
+            self.compile_button.setMaximumWidth(120)  # Allow some flexibility
+            
        
-        # Tool 3: Insert Character
-        insert_char_action = QAction(tr.get("insert_character", "Insert Character"), self.main_window)
-        icon = QIcon("icons/insert_character.svg")
-        insert_char_action.setIcon(icon)
-        insert_char_action.setShortcut("Ctrl+R")
-        insert_char_action.setStatusTip(tr.get("status_insert_character", "Insert special characters"))
-        insert_char_action.triggered.connect(self.main_window.open_insert_character_tab)
-        tools_menu.addAction(insert_char_action)
-        tools_menu.addSeparator()
-        # Tool 3: Spreadsheet
-        spreadsheet_action = QAction(tr["spreadsheet"], self.main_window)
-        icon = QIcon("icons/spreadsheet.svg")
-        spreadsheet_action.setIcon(icon)          
-        spreadsheet_action.setShortcut("Ctrl+E")
-        spreadsheet_action.setStatusTip(tr["status_spreadsheet"])
-        spreadsheet_action.triggered.connect(self.main_window.open_spreadsheet_tab)
-        tools_menu.addAction(spreadsheet_action)
-        tools_menu.addSeparator()      
-       
-        # Tool 3: DjVu Viewer
-        djvu_viewer_action = QAction(tr["djvu_viewer"], self.main_window)
-        icon = QIcon("icons/djvu.svg")  # provide an appropriate icon
-        djvu_viewer_action.setIcon(icon)
-        djvu_viewer_action.setShortcut("Ctrl+J")
-        djvu_viewer_action.setStatusTip(tr["status_open_djvu_viewer_tab"])
-        djvu_viewer_action.triggered.connect(self.main_window.open_djvu_tab)
-        tools_menu.addAction(djvu_viewer_action)
-        tools_menu.addSeparator()        
+        # Initialize state tracking
+        self._compiling = False
         
-        # Tool 4: Todo List
-        todo_list_action = QAction(tr["todo_list"], self.main_window)
-        icon = QIcon("icons/todo.svg")
-        todo_list_action.setIcon(icon)        
-        todo_list_action.setShortcut("Ctrl+L")
-        todo_list_action.setStatusTip(tr["status_todo_list"])
-        todo_list_action.triggered.connect(self.main_window.open_todo_list_tab)
-        tools_menu.addAction(todo_list_action)
-        tools_menu.addSeparator()        
-        # Tool 5: Insert Tikz code
-        tikz_plotter_action = QAction(tr["tikz_plotter"], self.main_window)
-        icon = QIcon("icons/tikz.svg")
-        tikz_plotter_action.setIcon(icon)                
-        tikz_plotter_action.setShortcut("Ctrl+P")
-        tikz_plotter_action.setStatusTip(tr["status_tikz_plotter"])
-        tikz_plotter_action.triggered.connect(self.main_window.tikz_plotter_tab)
-        tools_menu.addAction(tikz_plotter_action)
-        tools_menu.addSeparator()
-        # Tool 6: AI Assistant
-        ai_tab_action = QAction(tr["ai_assistant"], self.main_window)
-        icon = QIcon("icons/ai.svg")
-        ai_tab_action.setIcon(icon)
-        ai_tab_action.setShortcut("Ctrl+I")
-        ai_tab_action.setStatusTip(tr["status_ai_assistant"])
-        ai_tab_action.triggered.connect(
-            lambda: QTimer.singleShot(150, self.main_window.open_ai_tab)
+        # Update button text to show current engine
+        self.update_compile_button_text()
+        
+        # Refresh PDF action (unchanged)
+        self.refresh_action = QAction(
+            tr["refresh_pdf"], self.main_window
         )
-        tools_menu.addAction(ai_tab_action)
-        tools_menu.addSeparator()
-        # Tool 7: Latex Files comparison - FIXED: Simple triggered connection
-        tex_compare_action = QAction(tr["compare_latex_files"], self.main_window)
-        icon = QIcon("icons/compare_tex.svg")
-        tex_compare_action.setIcon(icon)        
-        tex_compare_action.setStatusTip(tr["status_compare_latex_files"])
-        tex_compare_action.triggered.connect(self._open_latex_comparator_with_expand)
-        tools_menu.addAction(tex_compare_action)       
-        # Tool 8: Pdf files comparison - FIXED: Simple triggered connection
-        pdf_compare_action = QAction(tr["compare_pdf_files"], self.main_window)
-        icon = QIcon("icons/compare_pdf.svg")
-        pdf_compare_action.setIcon(icon)                
-        pdf_compare_action.setStatusTip(tr["status_compare_pdf_files"])
-        pdf_compare_action.triggered.connect(self._open_pdf_comparison_with_expand)
-        tools_menu.addAction(pdf_compare_action)
+        #self.refresh_action.setShortcut("F6")
+        self.refresh_action.setToolTip(
+            tr["tooltip_refresh_pdf"]
+        )
+        self.refresh_action.triggered.connect(self.main_window.pdf_manager.refresh_pdf)
+        self.icons_manager.apply_icon_to_action(self.refresh_action, "refresh")
+        self.main_window.toolbar_refresh_action = self.refresh_action
+        self.main_toolbar.addAction(self.refresh_action)
+        
+        # View/SyncTeX Forward Search action
+        self.jump_action = QAction(
+            tr.get("jump_in_pdf", "Jump"), self.main_window
+        )
+        #self.jump_action.setShortcut("F7")
+        self.jump_action.setToolTip(
+            tr.get("tooltip_jump_in_pdf", "Jump to current line in PDF")
+        )
+        self.jump_action.triggered.connect(self.handle_jump_action)
+        self.icons_manager.apply_icon_to_action(self.jump_action, "jump_in_pdf") 
+        #self.main_window.toolbar_jump_action = self.jump_action
+        self.main_toolbar.addAction(self.jump_action)
+        
+        # Backmatter compile
+        self.backmatter_action = QAction(self.main_window.backmatter_engine, self.main_window)
+        # self.backmatter_action.setShortcut("F8")
+        self.backmatter_action.setToolTip(
+            tr["tooltip_backmatter_compile"].format(self.main_window.backmatter_engine)
+        )
+        
+        # Key fix: Connect to our unified handler instead of directly to compilation_manager
+        self.backmatter_action.triggered.connect(self.handle_backmatter_action)
+        
+        #self.icons_manager.apply_icon_to_action(self.backmatter_action, "backmatter_compile")
+        if lang == "ar":
+            self.icons_manager.apply_icon_to_action_mirrored(self.backmatter_action, "backmatter_compile", self._get_icon_angle())
+        else:
+            self.icons_manager.apply_icon_to_action(self.backmatter_action, "backmatter_compile")
+        
+        self.main_window.toolbar_backmatter_action = self.backmatter_action  # For backward compatibility
+        self.main_toolbar.addAction(self.backmatter_action)
+        
+        # Create hidden stop action for compatibility with existing update_compile_actions
+        self.backmatter_stop_action = QAction("Stop", self.main_window)
+        self.backmatter_stop_action.setVisible(False)  # Hidden, just for compatibility
+        self.main_window.toolbar_backmatter_stop_action = self.backmatter_stop_action
+        
+        # ✅ Get the actual QToolButton and fix its size
+        button2 = self.main_toolbar.widgetForAction(self.backmatter_action)
+        if button2:
+            button2.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            button2.setMinimumWidth(70)  # Fits "Compile" comfortably
+            button2.setMaximumWidth(0)
+        
+        # Initialize state tracking
+        self.backmatter_compiling = False
+        
+        # Update button text to show current engine
+        self.update_backmatter_compile_button_text()
 
-        self._setup_menu_close_protection()
+    def _get_icon_angle(self):
+        """Return rotation angle based on current language direction"""
+        return 180 if self.main_window.menu_language == "ar" else 0
+        
+    def update_language(self):
+        """Update toolbar with current language"""
+        # Recreate toolbar with new language
+        self.create_main_toolbar()
+        self.math_symbols_handler.build_symbol_categories()  # ← rebuild translations
+        self._create_symbols_widget()                         # ← then rebuild UI        
+        
+        
+    def update_compile_button_text(self):
+        """Update the compile button text to show current LaTeX engine"""
+        if hasattr(self, 'compile_action') and self.compile_action:
+            lang = getattr(self.main_window, 'menu_language', 'en')
+            tr = self.main_window.translations.get(lang, {})
+            if self._compiling:
+                self.compile_action.setText(tr.get("stop", "Stop"))
+                self.compile_action.setToolTip(tr.get("stop_compilation", "Stop compilation"))
+                if hasattr(self, 'icons_manager'):
+                    self.icons_manager.apply_icon_to_action(self.compile_action, "stop")
+            else:
+                engine = str(getattr(self.main_window, 'latex_engine', 'pdflatex')).strip()
+                # Look up translated engine name, fall back to raw name
+                engine_title = tr.get(engine, engine.replace('_', ' ').title())
+                self.compile_action.setText(engine_title)
+                #print("="*20,engine_title)
+                tooltip_template = tr.get("tooltip_compile", "Compile with {}")
+                self.compile_action.setToolTip(tooltip_template.format(engine_title))
+                if hasattr(self, 'icons_manager'):
+                    #self.icons_manager.apply_icon_to_action(self.compile_action, "compile")
+                    self.icons_manager.apply_icon_to_action_rotated(self.compile_action, "compile", self._get_icon_angle())
 
-    def _open_pdf_comparison_with_expand(self):
-        """Open PDF comparison and expand PDF viewer"""
+    def update_backmatter_compile_button_text(self):
+        """Update the compile button text to show current LaTeX engine"""
+        if hasattr(self, 'backmatter_action') and self.backmatter_action:
+            lang = getattr(self.main_window, 'menu_language', 'en')
+            tr = self.main_window.translations.get(lang, {})
+            if self.backmatter_compiling:
+                self.backmatter_action.setText(tr.get("stop", "Stop"))
+                self.backmatter_action.setToolTip(tr.get("stop_compilation", "Stop compilation"))
+                if hasattr(self, 'icons_manager'):
+                    self.icons_manager.apply_icon_to_action(self.backmatter_action, "stop")
+            else:
+                backmatter_engine = str(getattr(self.main_window, 'backmatter_engine', 'bibtex')).strip()
+                # Look up translated engine name, fall back to raw name
+                backmatter_title = tr.get(backmatter_engine, backmatter_engine.replace('_', ' ').title())
+                self.backmatter_action.setText(backmatter_title)
+                tooltip_template = tr.get("tooltip_backmatter_compile", "Compile with {}")
+                self.backmatter_action.setToolTip(tooltip_template.format(backmatter_title))  # ← bug fixed
+                if hasattr(self, 'icons_manager'):
+                    #self.icons_manager.apply_icon_to_action(self.backmatter_action, "backmatter_compile")
+                    self.icons_manager.apply_icon_to_action_rotated(self.backmatter_action, "backmatter_compile", self._get_icon_angle())
+
+    def handle_compile_action(self):
+        """Handle the unified compile/stop button click"""
+        
+        import time
+        current_time = time.time() * 1000  # Convert to milliseconds
+        
+        # ✅ Debounce check - ignore rapid clicks
+        if self._is_debounced(self._last_compile_click_time):
+            #print("⚠️ Ignoring rapid compile button click")
+            return
+            
+        self._last_compile_click_time = current_time  
+            
+        lang = self.main_window.menu_language 
+        tr = self.main_window.translations[lang]                                        
+        current_editor = self.main_window.editor_manager.get_current_editor()
+        current_file = self.main_window.editor_manager.get_current_file_path()
+        
+        if not current_editor or not current_file:
+            self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+            return
+
         try:
-            if hasattr(self.main_window, 'pdf_manager'):
-                self.main_window.pdf_manager._remove_welcome_tab_if_exists()          
-            # First open the comparison tab
-            self.open_pdf_comparison_tab_via_layout_manager()
-            # Then expand PDF viewer (only if not already expanded)
-            if not getattr(self.main_window, '_pdf_expanded', False):
-                self.main_window.toggle_pdf_expand_width()
-            # Hide output tabs
-            if hasattr(self.main_window, 'output_tabs_visible') and self.main_window.output_tabs_visible:
-                self.main_window.toggle_output_tabs()
-                
-            #self.main_window.side_panel.setVisible(False) 
+            if self._compiling:
+                # Currently compiling, so stop
+                self.main_window.compilation_manager.stop_compilation()
+                self._compiling = False
+                self.update_compile_button_text()
+            else:
+                # Not compiling, so start
+                self._compiling = True
+                self.update_compile_button_text()
+                self.main_window.compilation_manager.compile_latex()
+        except Exception as e:
+            print(f"Error in handle_compile_action: {e}")
+            import traceback
+            traceback.print_exc()
+            # Reset state on error
+            self._compiling = False
+            self.update_compile_button_text()
+
+    def on_compilation_started(self):
+        """Called when compilation starts"""
+        self._compiling = True
+        self.update_compile_button_text()
+
+    def on_compilation_finished(self):
+        """Called when compilation finishes"""
+        self._compiling = False
+        self.update_compile_button_text()
+
+    def update_engine_in_button(self, new_engine):
+        """Update button text when LaTeX engine changes"""
+        if hasattr(self.main_window, 'latex_engine'):
+            self.main_window.latex_engine = new_engine
+        self.update_compile_button_text()   
+        
+    def handle_backmatter_action(self):
+        """Handle the unified compile/stop button click"""
+        
+        import time
+        current_time = time.time() * 1000  # Convert to milliseconds
+        
+        # ✅ Debounce check - ignore rapid clicks
+        if self._is_debounced(self._last_backmatter_click_time):
+            #print("⚠️ Ignoring rapid backmatter button click")
+            return
+            
+        self._last_backmatter_click_time = current_time    
+
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]                                        
+        current_editor = self.main_window.editor_manager.get_current_editor()
+        current_file = self.main_window.editor_manager.get_current_file_path()
+        
+        if not current_editor or not current_file:
+            self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+            return
+
+
+        try:
+            if self.backmatter_compiling:
+                # Currently compiling, so stop
+                self.main_window.backmatter_compile._cancel_process()
+                self.backmatter_compiling = False
+                self.update_backmatter_compile_button_text()
+            else:
+                # Not compiling, so start
+                self.backmatter_compiling = True
+                self.update_backmatter_compile_button_text()
+                self.main_window.backmatter_compile.compile_backmatter(self.main_window.backmatter_engine)
+        except Exception as e:
+            print(f"Error in handle_compile_action: {e}")
+            import traceback
+            traceback.print_exc()
+            
+
+    def update_compile_actions(self, compiling=False):
+        """Update compile/stop button based on compilation state"""
+        self._compiling = compiling
+
+        if hasattr(self, 'compile_action') and self.compile_action:
+            if compiling:
+                self.compile_action.setText("Stop")
+                self.compile_action.setToolTip("Stop compilation (F5)")
+                self.icons_manager.apply_icon_to_action(self.compile_action, "stop")
+            else:
+                engine_name = str(self.main_window.latex_engine).strip()
+
+                # INLINE transformation
+                engine_title = engine_name.replace('_', ' ').title()
+
+                self.compile_action.setText(engine_title)
+                self.compile_action.setToolTip(f"Compile with {engine_title} (F5)")
+                self.icons_manager.apply_icon_to_action(self.compile_action, "compile")
+
+            self.compile_action.setEnabled(True)
+
+        if hasattr(self, 'stop_action'):
+            self.stop_action.setEnabled(compiling)
+        elif hasattr(self.main_window, 'toolbar_stop_action'):
+            self.main_window.toolbar_stop_action.setEnabled(compiling)
+
+
+    def update_backmatter_actions(self, compiling=False):
+        """Update compile/stop button based on compilation state"""
+            
+        self.backmatter_compiling = compiling        
+            
+        if compiling:
+            self.backmatter_action.setText("Stop")
+            self.backmatter_action.setToolTip("Stop backmatter compilation (F9)")
+            self.icons_manager.apply_icon_to_action(self.backmatter_action, "stop")
+        else:
+            backmatter_name = str(self.main_window.backmatter_engine).strip()
+
+            # INLINE transformation
+            backmatter_title = backmatter_name.replace('_', ' ').title()
+
+            self.backmatter_action.setText(backmatter_title)
+            self.backmatter_action.setToolTip(
+                f"Backmatter compile with {backmatter_title} (F9)"
+            )
+
+            self.icons_manager.apply_icon_to_action(
+                self.backmatter_action, "backmatter_compile"
+            )
+
+        self.backmatter_action.setEnabled(True)
+            
+        if hasattr(self, 'backmatter_stop_action'):
+            self.backmatter_stop_action.setEnabled(compiling)
+        elif hasattr(self.main_window, 'toolbar_backmatter_stop_action'):
+            self.main_window.toolbar_backmatter_stop_action.setEnabled(compiling)
+
+        
+    def handle_jump_action(self):
+        """Handle View button click - SyncTeX forward search from editor to PDF"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]                                    
+        current_editor = self.main_window.editor_manager.get_current_editor()
+        current_file = self.main_window.editor_manager.get_current_file_path()
+        
+        if not current_editor or not current_file:
+            self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+            return
+        
+        # Get current line number (1-indexed for SyncTeX)
+        cursor = current_editor.textCursor()
+        line_number = cursor.blockNumber() + 1
+        column_number = cursor.columnNumber() + 1
+        
+        # Perform forward SyncTeX search
+        if hasattr(self.main_window, 'pdf_manager'):
+            self.main_window.pdf_manager.synctex_forward_search(
+                current_file, line_number, column_number
+            )
+        
+
+    def _create_symbols_toggle(self):
+        """Create symbols toggle button"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        
+        symbols_action = QAction(tr["symbols_text"], self.main_window)
+        symbols_action.setToolTip(tr["tooltip_symbols"])
+        symbols_action.setCheckable(True)
+        symbols_action.setChecked(self.symbols_tab_visible)
+        symbols_action.triggered.connect(self.toggle_symbols_tab)
+        
+        self.icons_manager.apply_icon_to_action(symbols_action, "symbols")
+        self.main_toolbar.addAction(symbols_action)
+        
+        self.symbols_action = symbols_action
+        
+    def toggle_symbols_tab(self):
+        """Toggle the symbols tab visibility and sync with settings"""
+        self.symbols_tab_visible = not self.symbols_tab_visible
+        self.symbols_action.setChecked(self.symbols_tab_visible)
+        
+        # Sync with main window
+        self.main_window.symbols_tab_visible = self.symbols_tab_visible
+        
+        # Update UI
+        output_container = self.main_window.layout_manager.output_container
+        if not output_container:
+            return
+            
+        if self.symbols_tab_visible:
+            # Ensure output container is visible when showing sub-tabs
+            self._ensure_output_visible()
+            self._add_symbols_tab(output_container)
+            self._focus_tab(output_container, "Symbols")
+        else:
+            self._remove_symbols_tab(output_container)
+        
+        # Notify settings dialog if open
+        self._notify_settings_dialog_update()
+        
+
+    def _create_commands_toggle(self):
+        """Create commands toggle button"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        
+        commands_action = QAction(tr["commands_text"], self.main_window)
+        commands_action.setToolTip(tr["tooltip_commands"])
+        commands_action.setCheckable(True)
+        commands_action.setChecked(self.commands_tab_visible)
+        commands_action.triggered.connect(self.toggle_commands_tab)
+        
+        self.icons_manager.apply_icon_to_action(commands_action, "latex_commands")
+        self.main_toolbar.addAction(commands_action)
+        
+        self.commands_action = commands_action
+        
+    def toggle_commands_tab(self):
+        """Toggle the commands tab visibility and sync with settings"""
+        self.commands_tab_visible = not self.commands_tab_visible
+        self.commands_action.setChecked(self.commands_tab_visible)
+        
+        # Sync with main window
+        self.main_window.commands_tab_visible = self.commands_tab_visible
+        
+        # Update UI
+        output_container = self.main_window.layout_manager.output_container
+        if not output_container:
+            return
+            
+        if self.commands_tab_visible:
+            # Ensure output container is visible when showing sub-tabs
+            self._ensure_output_visible()
+            self._add_commands_tab(output_container)
+            self._focus_tab(output_container, "Commands")
+        else:
+            self._remove_commands_tab(output_container)
+        
+        # Notify settings dialog if open
+        self._notify_settings_dialog_update()
+        
+        
+    def _create_tree_toggle(self):
+        """Create tree toggle button"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        
+           
+        tree_action = QAction(tr["tree_text"], self.main_window)
+        tree_action.setToolTip(tr["tooltip_tree"])
+        tree_action.setCheckable(True)
+        tree_action.setChecked(self.tree_tab_visible)
+        tree_action.triggered.connect(self.toggle_tree_tab)
+        
+        self.icons_manager.apply_icon_to_action(tree_action, "tree")
+        self.main_toolbar.addAction(tree_action)
+        
+        self.tree_action = tree_action
+
 
             
-                              
-        except Exception as e:
-            print(f"❌ Error opening PDF comparison: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def _open_latex_comparator_with_expand(self):
-        """Open LaTeX comparator and expand editor"""
-        try:
-            # Track if welcome was removed
-            welcome_was_showing = False
-            if hasattr(self.main_window, 'editor_manager'):
-                em = self.main_window.editor_manager
-                # Check if only welcome tab exists
-                if hasattr(em, 'editor_tabs') and em.editor_tabs:
-                    if em.editor_tabs.count() == 1:
-                        if em.editor_tabs.tabText(0) == "Welcome":
-                            welcome_was_showing = True
-                em._remove_welcome_tabs_if_needed()
-            # Store this state so close knows to restore welcome
-            self.main_window._comparator_replaced_welcome = welcome_was_showing
-            # First open the comparator
-            self.main_window.open_latex_comparator()
-            # Then expand editor (only if not already expanded)
-            if not getattr(self.main_window, '_editor_expanded', False):
-                self.main_window.toggle_editor_expand_width()
-            # Hide output tabs
-            if hasattr(self.main_window, 'output_tabs_visible') and self.main_window.output_tabs_visible:
-                self.main_window.toggle_output_tabs()
-        except Exception as e:
-            print(f"❌ Error opening LaTeX comparator: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def open_pdf_comparison_tab_via_layout_manager(self):
-        """Open PDF comparison tab via layout manager - FIXED for welcome tab"""
-        try:
-            from pdf_comparison import PDFComparisonViewerSimplified
-        except ImportError as e:
-            QMessageBox.critical(self.main_window, "Error",f"PDF comparison module not found:\n{str(e)}")
-            return
-        try:
-            # Check if layout_manager exists
-            if not hasattr(self.main_window, 'layout_manager'):
-                QMessageBox.critical(self.main_window, "Error", "Layout manager not available")
-                return
-            layout_manager = self.main_window.layout_manager
-            # Ensure PDF container exists
-            if not hasattr(layout_manager, 'pdf_container') or layout_manager.pdf_container is None:
-                layout_manager._recreate_pdf_container()  # ✅ Use recreate instead
-            # Check if we have pdf_manager
-            if not hasattr(self.main_window, 'pdf_manager'):
-                QMessageBox.critical(self.main_window, "Error", "PDF manager not available")
-                return
-            pdf_manager = self.main_window.pdf_manager
-            # Handle both tabbed and H/V modes
-            if pdf_manager.pdf_layout_mode == "tabbed":
-                # Initialize PDF tabs if they don't exist OR if showing welcome
-                if not hasattr(pdf_manager, 'pdf_tabs') or pdf_manager.pdf_tabs is None:
-                    layout_manager._recreate_pdf_container()  # ✅ Use recreate
-                    tab_widget = pdf_manager.pdf_tabs
-                else:
-                    tab_widget = pdf_manager.pdf_tabs
-                    # Check if only welcome tab exists
-                    if tab_widget.count() == 1 and tab_widget.tabText(0) == "Welcome":
-                        layout_manager._recreate_pdf_container()  # ✅ Use recreate
-                        tab_widget = pdf_manager.pdf_tabs
-                if tab_widget is None:
-                    QMessageBox.critical(self.main_window, "Error", "Could not initialize PDF tabs")
-                    return
-                # ✅ Remove welcome tab if it exists
-                for i in reversed(range(tab_widget.count())):
-                    tab_text = tab_widget.tabText(i)
-                    if tab_text == "Welcome":
-                        tab_widget.removeTab(i)
-                        break
-                # Create new comparison viewer
-                comparison_viewer = PDFComparisonViewerSimplified(self.main_window)
-                
-                comparison_viewer.destroyed.connect(lambda: self.main_window.split_window_width())
-                self.main_window.pdf_comparison_viewer = comparison_viewer
-                # Remove existing comparison tab if present
-                for i in range(tab_widget.count()):
-                    if tab_widget.tabText(i) == "PDF Comparison":
-                        tab_widget.removeTab(i)
-                        break
-                # Add new tab
-                tab_index = tab_widget.addTab(comparison_viewer, "PDF Comparison")
-                # Set SVG icon properly
-                icon = QIcon("icons/compare_pdf.svg")
-                tab_widget.setTabIcon(tab_index, icon)                        
-                tab_widget.setCurrentIndex(tab_index)
-                tab_widget.setTabsClosable(True)  # ✅ Enable close button
-                # Ensure tab_widget is in the PDF container layout
-                pdf_layout = layout_manager.pdf_container.layout()
-                if pdf_layout and pdf_layout.indexOf(tab_widget) == -1:
-                    # Clear layout first
-                    while pdf_layout.count():
-                        item = pdf_layout.takeAt(0)
-                        if item.widget() and item.widget() != tab_widget:
-                            item.widget().setParent(None)
-                    pdf_layout.addWidget(tab_widget)
-                # Force visibility and updates
-                tab_widget.show()
-                tab_widget.setVisible(True)
-                comparison_viewer.show()
-                layout_manager.pdf_container.update()
-                layout_manager.pdf_container.repaint()
-            else:
-                # H/V mode
-                if not hasattr(pdf_manager, 'pdf_splitter') or pdf_manager.pdf_splitter is None:
-                    if hasattr(layout_manager, '_recreate_pdf_container'):
-                        layout_manager._recreate_pdf_container()
-                splitter = pdf_manager.pdf_splitter
-                if not splitter:
-                    QMessageBox.critical(self.main_window, "Error", "Could not initialize PDF splitter")
-                    return
-                # Remove welcome widget if it exists
-                while splitter.count() > 0:
-                    widget = splitter.widget(0)
-                    widget.setParent(None)
-                # Create new comparison viewer
-                comparison_viewer = PDFComparisonViewerSimplified(self.main_window)
-                
-                comparison_viewer.destroyed.connect(lambda: self.main_window.split_window_width())
-                self.main_window.pdf_comparison_viewer = comparison_viewer
-                # Wrap in tab widget for consistency
-                tab_widget = QTabWidget()
-                tab_widget.addTab(comparison_viewer, "PDF Comparison")
-                tab_widget.setTabsClosable(True)
-                # Add to splitter
-                splitter.addWidget(tab_widget)
-            # Ensure the PDF container is visible
-            #if hasattr(layout_manager, '_arrange_containers'):
-            #    layout_manager._arrange_containers()
-        except RuntimeError as e:
-            # Force cleanup and retry
-            if hasattr(self.main_window, 'pdf_comparison_viewer'):
-                delattr(self.main_window, 'pdf_comparison_viewer')
-            # Retry once
-            if not hasattr(self, '_comparison_retry_attempted'):
-                self._comparison_retry_attempted = True
-                self.open_pdf_comparison_tab_via_layout_manager()
-                delattr(self, '_comparison_retry_attempted')
-            else:
-                QMessageBox.critical(self.main_window, "Error","Could not create PDF comparison tab after cleanup attempt")
-        except Exception as e:
-            QMessageBox.critical(self.main_window, "Error",f"Failed to open PDF comparison tab:\n{str(e)}")
-            import traceback
-            traceback.print_exc()
-
-    def toggle_pdf_expand_width(self):
-        """Toggle PDF viewer expand width from menu"""
-        # Find the current active PDF viewer
-        current_pdf_viewer = None
-        if hasattr(self, 'pdf_manager') and hasattr(self.pdf_manager, 'pdf_tabs'):
-            tab_widget = self.pdf_manager.pdf_tabs
-            current_widget = tab_widget.currentWidget()
-            # Check if current widget is a PDF viewer
-            if hasattr(current_widget, 'toggle_expand_width'):
-                current_pdf_viewer = current_widget
-            else:
-                # Look for PDF viewers in the widget hierarchy
-                pdf_viewers = current_widget.findChildren(PDFViewer) if current_widget else []
-                if pdf_viewers:
-                    current_pdf_viewer = pdf_viewers[0]
-        if current_pdf_viewer:
-            current_pdf_viewer.toggle_expand_width()
-        else:
-            QMessageBox.information(self.main_window, "Info", "No active PDF viewer found to toggle.")
-
-    def _handle_output_toggle(self):
-        """Handle output toggle from menu - ensures proper state sync"""
-        self.main_window.toggle_output_tabs()
-        # Force menu update after toggle
-        #QTimer.singleShot(50, self._update_output_toggle_action)
-
-    def _update_output_toggle_action(self):
-        """Update output toggle action text and icon based on current state"""
-        if not hasattr(self.main_window, 'menu_output_toggle_action'):
-            return
-        lang = self.main_window.menu_language  
-        action = self.main_window.menu_output_toggle_action
-        # Get actual current state from the main window
-        actual_state = self.main_window.get_actual_output_state()
-        # Update based on ACTUAL current state
-        if actual_state:            
-            action.setText(self.main_window.translations[lang]["hide_output"])
-            action.setToolTip(self.main_window.translations[lang]["tooltip_hide_output"])
-            action.setStatusTip(self.main_window.translations[lang]["status_hide_output"])
-        else:            
-            action.setText(self.main_window.translations[lang]["show_output"])
-            action.setToolTip(self.main_window.translations[lang]["tooltip_show_output"])
-            action.setStatusTip(self.main_window.translations[lang]["status_show_output"])
-
-    # def update_menu_language(self):
-        # """SAFE menu language update - ONLY update texts, don't recreate menus"""
-        # # Just update the output toggle action text
-        # self._update_output_toggle_action()
-        # # NOTE: Add other specific text updates here if needed, but NEVER clear menuBar()
-
-    def _compile_with_engine(self, engine):
-        """Compile with specific engine and update global setting"""
-        self.main_window.latex_engine = engine  # ✅ Update global engine
-        self.main_window.compilation_manager.compile_latex(engine)        
-
-    def _create_latex_menu(self):
-        lang = self.main_window.menu_language        
-        tr = self.main_window.translations[lang]
-        latex_menu = self.main_window.menuBar().addMenu("&"+tr["latex_menu"])
-        # ✅ Create Compile menu
-        compile_menu = QMenu(tr["compile"], self.main_window)
-        compile_menu.setToolTip(tr["tooltip_compile_latex_with_selected_engine"])
-        compile_menu.setStatusTip(tr["status_compile"])
-        # ✅ Add engine actions
-        pdflatex_action = QAction(tr.get("pdflatex", "PDFLaTeX"), self.main_window)
-        pdflatex_action.setStatusTip(tr.get("status_pdflatex", "Compile with pdfLaTeX"))
-        pdflatex_action.triggered.connect(lambda: self._compile_with_engine("pdflatex"))
-        compile_menu.addAction(pdflatex_action)
-        xelatex_action = QAction(tr.get("xelatex", "XeLaTeX"), self.main_window)
-        xelatex_action.setStatusTip(tr.get("status_xelatex", "Compile with XeLaTeX"))
-        xelatex_action.triggered.connect(lambda: self._compile_with_engine("xelatex"))
-        compile_menu.addAction(xelatex_action)
-        lualatex_action = QAction(tr.get("lualatex", "LuaLaTeX"), self.main_window)
-        lualatex_action.setStatusTip(tr.get("status_lualatex", "Compile with LuaLaTeX"))
-        lualatex_action.triggered.connect(lambda: self._compile_with_engine("lualatex"))
-        compile_menu.addAction(lualatex_action)
-        # ✅ Set F5 shortcut to trigger current default engine
-        compile_action = QAction(self.main_window)
-        compile_action.setShortcut(QKeySequence("F5"))
-        # Show "Compile F5" in the menu
-        compile_menu.menuAction().setText(f'{tr["compile"]}\tF5')
-        compile_action.triggered.connect(
-            lambda: self.main_window.compilation_manager.compile_latex(self.main_window.latex_engine)
-        )
-        compile_action.setStatusTip(tr["status_compile"])
-        self.main_window.addAction(compile_action)  
-        # ✅ Apply icon to menu (shows on toolbar if added)
-        self.icons_manager.apply_icon_to_action(compile_action, "compile")
-        compile_menu.setIcon(compile_action.icon())
-        # Add menu to LaTeX menu
-        latex_menu.addMenu(compile_menu)
-        # Save references
-        self.main_window.compile_menu = compile_menu
-        self.main_window.menu_compile_action = compile_action
-        # Refresh
-        refresh_action = QAction(tr["refresh_pdf"], self.main_window)
-        refresh_action.setShortcut("F6")
-        refresh_action.setStatusTip(tr["status_refresh_pdf"])
-        refresh_action.triggered.connect(self.main_window.pdf_manager.refresh_pdf)  # ✅ Correct Refresh PDF
-        self.icons_manager.apply_icon_to_action(refresh_action, "refresh")
-        latex_menu.addAction(refresh_action)
-        # Jump
-        jump_action = QAction(tr.get("view_in_pdf", "Jump"), self.main_window)        
-        jump_action.setShortcut("F7")
-        jump_action.setStatusTip(tr.get("status_view_in_pdf", "Jump to the current line in PDF"))
-        jump_action.triggered.connect(self.main_window.toolbar_manager.handle_jump_action)
-        self.icons_manager.apply_icon_to_action(jump_action, "jump_in_pdf")  
-        latex_menu.addAction(jump_action)        
-        # ✅ Create Backmatter menu
-        backmatter_menu = QMenu(tr.get("backmatter","Backmatter"), self.main_window)
-        backmatter_menu.setToolTip("Compile bibliography, index, and glossary")
-        backmatter_menu.setStatusTip(tr.get("status_backmatter", "Compile auxiliary LaTeX files"))
-        # ✅ Add actions
-        bibtex_action = QAction(tr.get("bibtex", "BibTeX"), self.main_window)
-        bibtex_action.setStatusTip(tr.get("status_bibtex", "Run BibTeX on the current document"))
-        bibtex_action.triggered.connect(lambda: self.main_window.backmatter_compile.compile_backmatter("bibtex"))
-        makeindex_action = QAction(tr.get("makeindex", "MakeIndex"), self.main_window)
-        makeindex_action.setStatusTip(tr.get("status_makeindex", "Run MakeIndex for index generation"))
-        makeindex_action.triggered.connect(lambda: self.main_window.backmatter_compile.compile_backmatter("makeindex"))
-        makeglossaries_action = QAction(tr.get("makeglossaries", "MakeGlossaries"), self.main_window)
-        makeglossaries_action.setStatusTip(tr.get("status_makeglossaries", "Run MakeGlossaries for glossary generation"))
-        makeglossaries_action.triggered.connect(lambda: self.main_window.backmatter_compile.compile_backmatter("makeglossaries"))
-        # Add to menu
-        backmatter_menu.addAction(bibtex_action)
-        backmatter_menu.addAction(makeindex_action)
-        backmatter_menu.addAction(makeglossaries_action)
-        #  Backmatter compile
-        backmatter_action = QAction(self.main_window)
-        backmatter_action.setShortcut("F8")
-        # Show "Backmatter    F8" in the menu
-        backmatter_menu.menuAction().setText(f'{tr["backmatter"]}\tF8')           
-        backmatter_action.triggered.connect(
-            lambda: self.main_window.backmatter_compile.compile_backmatter(self.main_window.backmatter_engine)
-        )
-        backmatter_action.setStatusTip(tr.get("status_backmatter", "Compile bibliography, index, and glossary"))
-        self.main_window.addAction(backmatter_action)  
-        # ✅ Apply icon to menu (shows on toolbar if added)
-        self.icons_manager.apply_icon_to_action(backmatter_action, "backmatter_compile")
-        backmatter_menu.setIcon(backmatter_action.icon())
-        # ✅ Add menu to LaTeX menu
-        latex_menu.addMenu(backmatter_menu)
-        # Save reference
-        self.main_window.backmatter_menu = backmatter_menu
-        self.main_window.backmatter_action = backmatter_action
-        latex_menu.addSeparator()
-
-
-        # Arabic tool        
-        arabic_action = QAction(tr["arabic_tool"], self.main_window)
-        arabic_action.triggered.connect(self.main_window.toolbar_manager.open_arabic_command_dialog)
-        arabic_action.setShortcut("Alt+A")
-        arabic_action.setStatusTip(tr["status_arabic_tool"])
-        self.icons_manager.apply_icon_to_action(arabic_action, "arabic")
-        latex_menu.addAction(arabic_action)        
+    def toggle_tree_tab(self):
+        """Toggle the tree tab visibility and sync with settings"""
+        self.tree_tab_visible = not self.tree_tab_visible
+        self.tree_action.setChecked(self.tree_tab_visible)
         
-        # Double language insertion tool 
-        if hasattr(self, 'double_lang_action'):
+        # Sync with main window
+        self.main_window.tree_tab_visible = self.tree_tab_visible
+        
+        # Update UI
+        output_container = self.main_window.layout_manager.output_container
+        if not output_container:
+            return
+            
+        if self.tree_tab_visible:
+            # Ensure output container is visible when showing sub-tabs
+            self._ensure_output_visible()
+            self._add_tree_tab(output_container)
+            self._focus_tab(output_container, "Tree")
+        else:
+            self._remove_tree_tab(output_container)
+        
+        # Notify settings dialog if open
+        self._notify_settings_dialog_update()
+            
+    
+    def enhanced_create_main_toolbar(self):
+        # Call original method
+        original_create_toolbar()
+        
+        # Add bookmarks button
+        #self._create_bookmarks_toggle()
+    
+    def _create_bookmarks_toggle(self):
+        """Create bookmarks toggle button"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+      
+        
+        from PyQt5.QtWidgets import QAction
+        bookmarks_action = QAction(tr["bookmarks_text"], self.main_window)
+        bookmarks_action.setToolTip(tr["tooltip_bookmarks"])
+        bookmarks_action.setCheckable(True)
+        bookmarks_action.setChecked(self.bookmarks_tab_visible)
+        bookmarks_action.triggered.connect(self.toggle_bookmarks_tab)
+        
+        # Apply icon
+        if hasattr(self, 'icons_manager'):
+            self.icons_manager.apply_icon_to_action(bookmarks_action, "bookmarks")
+        
+        self.main_toolbar.addAction(bookmarks_action)
+        self.bookmarks_action = bookmarks_action
+    
+    def toggle_bookmarks_tab(self):
+        """Toggle bookmarks tab visibility and sync with settings"""
+        self.bookmarks_tab_visible = not self.bookmarks_tab_visible
+        self.bookmarks_action.setChecked(self.bookmarks_tab_visible)
+
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        
+        # Sync with main window
+        self.main_window.bookmarks_tab_visible = self.bookmarks_tab_visible
+        
+        # Update UI
+        output_container = self.main_window.layout_manager.output_container
+        if not output_container:
+            return
+            
+        if self.bookmarks_tab_visible:
+            # Ensure output container is visible when showing sub-tabs
+            self._ensure_output_visible()
+            self._add_bookmarks_tab(output_container)
+            self._focus_tab(output_container, tr["bookmarks"])
+        else:
+            self._remove_bookmarks_tab(output_container)
+        
+        # Notify settings dialog if open
+        self._notify_settings_dialog_update()
+    
+    def _add_bookmarks_tab(self, output_container):
+        """Add bookmarks tab to output container"""
+        # Check if tab already exists
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]        
+        
+        for i in range(output_container.count()):
+            if output_container.tabText(i) == tr["bookmarks"]:
+                return
+        
+        # Create bookmarks widget if it doesn't exist
+        if not hasattr(self.main_window, 'bookmarks_widget'):
+            self.main_window.bookmarks_widget = BookmarksWidget(self.main_window)
+        
+        output_container.addTab(self.main_window.bookmarks_widget, tr["bookmarks"])
+    
+    def _remove_bookmarks_tab(self, output_container):
+        """Remove bookmarks tab from output container"""
+        translations = self.main_window.translations
+
+        # Collect all possible labels for "tree"
+        possible_labels = {"Bookmarks"}  # source text
+        for lang in translations:
+            possible_labels.add(translations[lang]["bookmarks"])
+            
+        for i in range(output_container.count()):
+            if output_container.tabText(i) in possible_labels:
+                output_container.removeTab(i)
+                break
+                
+    def _ensure_output_visible(self):
+        """Ensure output container is visible when enabling sub-tabs"""
+        if (hasattr(self.main_window, 'layout_manager') and 
+            hasattr(self.main_window.layout_manager, 'output_container') and
+            self.main_window.layout_manager.output_container and
+            not self.main_window.layout_manager.output_container.isVisible()):
+            
+            # Show output container
+            self.main_window.layout_manager.output_container.setVisible(True)
+            self.main_window.output_tab_visible = True
+            
+            # Update output toggle action if it exists
+            if (hasattr(self.main_window, 'menu_manager') and 
+                hasattr(self.main_window.menu_manager, 'output_action')):
+                self.main_window.menu_manager.output_action.setChecked(True)
+
+    def _notify_settings_dialog_update(self):
+        """Notify settings dialog to update checkboxes if open"""
+        # Check if settings dialog is open
+        if (hasattr(self.main_window, 'settings_manager') and
+            hasattr(self.main_window.settings_manager, 'dialog') and
+            self.main_window.settings_manager.dialog and
+            self.main_window.settings_manager.dialog.isVisible()):
+            
+            dialog = self.main_window.settings_manager.dialog
+            # Reload current settings to sync checkboxes
+            if hasattr(dialog, 'load_current_settings'):
+                dialog.load_current_settings()
+
+######
+    def remove_bookmarks_tab(self, file_path):
+        """Remove bookmarks tab when closing a file"""
+        translations = self.main_window.translations
+
+        # Collect all possible labels for "tree"
+        possible_labels = {"Bookmarks"}  # source text
+        for lang in translations:
+            possible_labels.add(translations[lang]["bookmarks"])
+            
+        try:
+            #print(f"Processing bookmark removal for file: {file_path}")
+            
+            # Find output tab widget containing bookmarks
+            output_tab_widget = None
+            
+            # Simple search for any QTabWidget with "Bookmarks" tab
+            central_widget = self.main_window.centralWidget()
+            if central_widget:
+                tab_widgets = central_widget.findChildren(QTabWidget)
+                for tab_widget in tab_widgets:
+                    for i in range(tab_widget.count()):
+                        if tab_widget.tabText(i)  in possible_labels:
+                            output_tab_widget = tab_widget
+                            break
+                    if output_tab_widget:
+                        break
+            
+            # Remove the bookmarks tab entirely
+            if output_tab_widget:
+                for i in range(output_tab_widget.count()):
+                    if output_tab_widget.tabText(i)  in possible_labels:
+                        output_tab_widget.removeTab(i)
+                        #print("Removed bookmarks tab")
+                        break
+            else:
+                pass
+                #print("No bookmarks tab found to remove")
+                
+        except Exception as e:
+            print(f"Error in remove_bookmarks_tab: {e}")    
+######          
+
+    def _create_tree_widget(self):
+        """Create the tree tab widget showing document structure"""
+        ui_font = self._get_ui_font()  # ✅
+
+        main_widget = QWidget()
+        layout = QVBoxLayout(main_widget)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        tree = DocumentTreeWidget(self.main_window)
+        tree.setFont(ui_font)          # ✅ Tree content font
+        tree.header().setFont(ui_font) # ✅ Tree header font
+        layout.addWidget(tree)
+
+        if hasattr(self.main_window, 'editor_manager'):
+            tree.refresh_tree()
+
+        return main_widget
+
+    def _focus_tab(self, output_container, tab_name):
+        """Focus on a specific tab by name - P2 Fix"""
+        for i in range(output_container.count()):
+            if output_container.tabText(i) == tab_name:
+                output_container.setCurrentIndex(i)
+                break           
+
+                
+    def _add_tree_tab(self, output_container):
+        """Add tree tab to output container"""
+        # Check if tab already exists
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]        
+        
+        for i in range(output_container.count()):
+            if output_container.tabText(i) == tr["tree"]:
+                return
+                
+        tree_widget = self._create_tree_widget()
+        output_container.addTab(tree_widget, tr["tree"])
+
+    def _remove_tree_tab(self, output_container):
+        """Remove tree tab from output container"""
+        translations = self.main_window.translations
+
+        # Collect all possible labels for "tree"
+        possible_labels = {"Tree"}  # source text
+        for lang in translations:
+            possible_labels.add(translations[lang]["tree"])
+            
+        for i in range(output_container.count()):
+            if output_container.tabText(i)  in possible_labels:
+                output_container.removeTab(i)
+                break
+                
+    def _get_ui_font(self):
+        """Get the current UI font"""
+        if hasattr(self.main_window, 'get_current_font_settings'):
+            fonts = self.main_window.get_current_font_settings()
+            family = fonts.get('ui_font_family', 'Arial')
+            size = fonts.get('toolbar_font_size', 10)
+            return QFont(family, size)
+        return QFont('Arial', 10)
+
+    def _add_symbols_tab(self, output_container):
+        """Add symbols tab to output container"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        # Check if tab already exists
+        possible_labels = {"Symbols"}
+        for lang in self.main_window.translations:
+            possible_labels.add(tr["symbols"])
+       
+        
+        for i in range(output_container.count()):
+            if output_container.tabText(i) in possible_labels:        
+                return
+                
+        symbols_widget = self._create_symbols_widget()
+        output_container.addTab(symbols_widget, tr["symbols"])
+
+    def _remove_symbols_tab(self, output_container):
+        translations = self.main_window.translations
+
+        # Collect all possible labels for "symbols"
+        possible_labels = {"Symbols"}  # source text
+        for lang in translations:
+            possible_labels.add(translations[lang]["symbols"])
+
+        for i in range(output_container.count()):
+            if output_container.tabText(i) in possible_labels:
+                output_container.removeTab(i)
+                break
+
+    def _add_commands_tab(self, output_container):
+        """Add commands tab to output container"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]        
+
+        # Check if tab already exists
+        possible_labels = {"Commands"}
+        for lang in self.main_window.translations:
+            possible_labels.add(tr["commands"])
+
+        
+        for i in range(output_container.count()):
+            if output_container.tabText(i) in possible_labels:        
+                return
+                
+        commands_widget = self._create_commands_widget()
+        output_container.addTab(commands_widget, tr["commands"])
+
+    def _remove_commands_tab(self, output_container):
+        """Remove commands tab from output container"""
+        translations = self.main_window.translations
+
+        # Collect all possible labels for "symbols"
+        possible_labels = {"Commands"}  # source text
+        for lang in translations:
+            possible_labels.add(translations[lang]["commands"])                
+        
+        for i in range(output_container.count()):
+            if output_container.tabText(i) in possible_labels:
+                output_container.removeTab(i)
+                break
+
+    
+    def _create_symbols_widget(self):
+        """Create the symbols tab widget with category tabs"""
+        main_widget = QWidget()
+        layout = QVBoxLayout(main_widget)
+        layout.setContentsMargins(2, 2, 2, 2)
+        
+        ui_font = self._get_ui_font()  # ✅
+
+        # Create tab widget for symbol categories
+        symbols_tabs = QTabWidget()
+        symbols_tabs.setTabPosition(QTabWidget.North)
+        symbols_tabs.tabBar().setFont(ui_font)  # ✅ Apply font to tab bar
+        
+        # Add each symbol category as a tab
+        for category_key, category_data in self.math_symbols_handler.symbol_categories.items():
+            category_name = category_data["tr"]
+            category_widget = self._create_symbol_category_widget(category_key, category_data)
+            symbols_tabs.addTab(category_widget, category_name)
+        
+        layout.addWidget(symbols_tabs)
+        
+        
+        # ✅ CRITICAL: store references
+        main_widget.symbols_tabs = symbols_tabs
+        main_widget.math_menu = self.math_symbols_handler        
+        
+        return main_widget
+
+
+    def _create_commands_widget(self):
+        """Create the commands tab widget with category tabs"""
+        main_widget = QWidget()
+        layout = QVBoxLayout(main_widget)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        ui_font = self._get_ui_font()  # ✅
+        
+        # Create tab widget for command categories
+        commands_tabs = QTabWidget()
+        commands_tabs.setTabPosition(QTabWidget.North)
+        commands_tabs.tabBar().setFont(ui_font)  # ✅ Apply font to tab bar
+        
+        # Add each command category as a tab
+        for category_key, category_data in self.latex_commands_handler.sectionning_categories.items():
+            category_name = category_data["tr"]
+            category_widget = self._create_command_category_widget(category_key, category_data)
+            commands_tabs.addTab(category_widget, category_name)
+        
+        layout.addWidget(commands_tabs)
+
+       # ✅ CRITICAL: store references
+        main_widget.commands_tabs = commands_tabs
+        main_widget.commands_menu = self.latex_commands_handler
+        
+        
+        return main_widget
+
+
+    def _create_symbol_category_widget(self, category_key, category_data):
+        """Create widget for a symbol category with button matrix - IMPROVED LAYOUT"""
+        # Main widget with scroll area
+        main_widget = QWidget()
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(2, 2, 2, 2)
+        
+        # Create scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Content widget with grid layout
+        content_widget = QWidget()
+        grid_layout = QGridLayout(content_widget)
+        grid_layout.setSpacing(4)  # ✅ Thicker spacing between buttons
+        grid_layout.setContentsMargins(1, 1, 1, 1)
+        
+        # Create buttons for symbols
+        symbols = category_data["symbols"]
+        cols = 6  # Number of columns in the grid
+        
+        for i, item in enumerate(symbols):
+            if len(item) == 3:
+                symbol_display, latex_code, description = item
+                package = None
+            else:
+                symbol_display, latex_code, description, package = item                
+            row = i // cols
+            col = i % cols
+            button = self._create_symbol_button(symbol_display, latex_code, description, package)
+            grid_layout.addWidget(button, row, col)
+        
+        # ✅ Make grid expand to fill space
+        for col in range(cols):
+            grid_layout.setColumnStretch(col, 1)
+        
+        # Set content widget to scroll area
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+        
+        return main_widget
+
+
+
+    def _create_command_category_widget(self, category_key, category_data):
+        """Create widget for a command category with button matrix - IMPROVED LAYOUT"""
+        main_widget = QWidget()
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(2, 2, 2, 2)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        content_widget = QWidget()
+        grid_layout = QGridLayout(content_widget)
+        grid_layout.setSpacing(4)
+        grid_layout.setContentsMargins(1, 1, 1, 1)
+
+        commands = category_data["commands"]
+        cols = 4
+
+        for i, item in enumerate(commands):
+            # Unpack safely (3 or 4 elements)
+            if len(item) == 3:
+                command_display, latex_code, description = item
+                package = None
+            else:
+                command_display, latex_code, description, package = item
+            row = i // cols
+            col = i % cols
+            button = self._create_command_button(command_display, latex_code, description, package)
+            grid_layout.addWidget(button, row, col)
+
+        for col in range(cols):
+            grid_layout.setColumnStretch(col, 1)
+
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+
+        return main_widget
+
+    def _create_symbol_button(self, symbol_display, latex_code, description, package=None, icon_size=32):
+        """
+        Create a button for a mathematical symbol with dynamic icon sizing
+        
+        Args:
+            symbol_display: Display text for the symbol (Unicode character)
+            latex_code: LaTeX code to insert (e.g., r"\alpha")
+            description: Tooltip description
+            icon_size: Initial icon size (will scale with button resize)
+        
+        Returns:
+            QPushButton configured for the symbol
+        """
+        button = QPushButton()        
+        tooltip = f"<b>{description}</b><br>"
+        tooltip += f"Symbol: {symbol_display}<br>"
+        tooltip += f"LaTeX: <code>{latex_code}</code>"
+
+        if package:
+            tooltip += f"<br><span style='color:gray;'>Requires: <code>{package}</code></span>"
+
+        button.setToolTip(tooltip)        
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        button.setMinimumHeight(40)
+
+
+        # ✅ Apply UI font
+        current_fonts = self.main_window.get_current_font_settings()
+        ui_font = QFont(
+            current_fonts.get('ui_font_family', 'Arial'),
+            current_fonts.get('toolbar_font_size', 10)
+        )
+        button.setFont(ui_font)
+        
+        # Try to get icon from icons manager
+        icon = self.icons_manager.get_math_symbol_icon(latex_code, size=icon_size)
+        
+        if icon and not icon.isNull():
+            button.setIcon(icon)
+            button._has_icon = True
+            button._latex_code = latex_code  # Store for dynamic resizing
+            button._is_symbol = True
+            
+            # Set icon alignment and positioning
+            button.setIconSize(QSize(icon_size, icon_size))
+            # Remove any text to ensure icon is centered
+            button.setText("")
+            
+            # Override resizeEvent to dynamically adjust icon size
+            original_resize = button.resizeEvent
+            
+            def resize_with_dynamic_icon(event):
+                original_resize(event)
+                # Make icon 70% of button height, with reasonable bounds
+                new_size = min(int(button.height() * 0.75), 64)
+                new_size = max(new_size, 16)  # Minimum 16px
+                
+                # Get resized icon from manager (uses cache)
+                resized_icon = self.icons_manager.get_math_symbol_icon(
+                    button._latex_code, 
+                    size=new_size
+                )
+                if resized_icon and not resized_icon.isNull():
+                    button.setIcon(resized_icon)
+                    button.setIconSize(QSize(new_size, new_size))
+            
+            button.resizeEvent = resize_with_dynamic_icon
+        #else:
+            # Fallback to text display
+        #    button.setText(symbol_display)
+        else:
+            # Fallback to text display with larger bold font
+            button.setText(symbol_display)
+            fallback_font = QFont(
+                current_fonts.get('ui_font_family', 'Arial'),
+                14  # Larger size for readability
+            )
+            fallback_font.setBold(True)
+            button.setFont(fallback_font)            
+        
+        # Apply styling (assumes NORMAL_BUTTON is defined in style.py)
+        try:
+            from style_manager import NORMAL_BUTTON
+            button.setStyleSheet(NORMAL_BUTTON())
+        except ImportError:
+            # Fallback styling if style module not available
+            button.setStyleSheet("""
+                QPushButton {
+                    border: 1px solid #ccc;
+                    border-radius: 3px;
+                    background-color: #f9f9f9;
+                    padding: 5px;
+                }
+                QPushButton:hover {
+                    background-color: #e9e9e9;
+                }
+                QPushButton:pressed {
+                    background-color: #d9d9d9;
+                }
+            """)
+        
+        # Connect to insert function
+        button.clicked.connect(
+            lambda: self.main_window.editor_manager.insert_latex_command(latex_code)
+        )
+        
+        return button
+    
+
+    def _create_command_button(self, command_display, latex_code, description, package=None, icon_size=24):
+        """
+        Create a button for a LaTeX command with dynamic icon sizing
+
+        Args:
+            command_display: Display text for the command
+            latex_code: LaTeX code to insert (e.g., r"\section{}")
+            description: Tooltip description
+            package: Optional required LaTeX package (e.g., "amsmath")
+            icon_size: Initial icon size
+
+        Returns:
+            QPushButton configured for the command
+        """
+        button = QPushButton()
+        
+        # Build rich tooltip (same format as symbol button)
+        tooltip = f"<b>{description}</b><br>"
+        tooltip += f"LaTeX: <code>{latex_code}</code>"
+        if package:
+            tooltip += f"<br><span style='color:gray;'>Requires: <code>{package}</code></span>"
+        button.setToolTip(tooltip)
+        
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        button.setMinimumHeight(40)
+
+        # Apply UI font
+        current_fonts = self.main_window.get_current_font_settings()
+        ui_font = QFont(
+            current_fonts.get('ui_font_family', 'Arial'),
+            current_fonts.get('toolbar_font_size', 10)
+        )
+        button.setFont(ui_font)
+        
+        # Try to get icon from icons manager
+        icon = self.icons_manager.get_latex_command_icon(latex_code, size=icon_size)
+        
+        if icon and not icon.isNull():
+            button.setIcon(icon)
+            button._has_icon = True
+            button._latex_code = latex_code
+            button._is_command = True
+            
+            # Dynamic resizing for command icons
+            original_resize = button.resizeEvent
+            
+            def resize_with_dynamic_icon(event):
+                original_resize(event)
+                new_size = min(int(button.height() * 0.75), 48)
+                new_size = max(new_size, 14)
+                
+                resized_icon = self.icons_manager.get_latex_command_icon(
+                    button._latex_code,
+                    size=new_size
+                )
+                if resized_icon and not resized_icon.isNull():
+                    button.setIcon(resized_icon)
+                    button.setIconSize(QSize(new_size, new_size))
+            
+            button.resizeEvent = resize_with_dynamic_icon
+            button.setIconSize(QSize(icon_size, icon_size))
+            
+            # Show abbreviated text with icon
+            display_text = command_display[:12] if len(command_display) > 12 else command_display
+            button.setText(display_text)
+        else:
+            # Use text only (truncated if too long) with larger bold font
+            display_text = command_display if len(command_display) <= 18 else command_display[:15] + "..."
+            button.setText(display_text)
+            fallback_font = QFont(
+                current_fonts.get('ui_font_family', 'Arial'),
+                14
+            )
+            fallback_font.setBold(True)
+            button.setFont(fallback_font)            
+        
+        # Apply styling
+        try:
+            from style_manager import GREEN_BUTTON
+            button.setStyleSheet(GREEN_BUTTON())
+        except ImportError:
+            button.setStyleSheet("""
+                QPushButton {
+                    border: 1px solid #4CAF50;
+                    border-radius: 3px;
+                    background-color: #E8F5E9;
+                    padding: 5px;
+                }
+                QPushButton:hover {
+                    background-color: #C8E6C9;
+                }
+                QPushButton:pressed {
+                    background-color: #A5D6A7;
+                }
+            """)
+        
+        # Connect to insert function
+        button.clicked.connect(
+            lambda: self.main_window.editor_manager.insert_latex_command(latex_code)
+        )
+        
+        return button
+
+
+    def refresh_button_styles(self):
+        """Re-apply current theme styles to all symbol/command buttons."""
+        from style_manager import get_button_style
+        normal_style = get_button_style("normal")
+        green_style  = get_button_style("green")
+
+        # Search the entire main window widget tree — buttons may be
+        # inside QWidget containers inside toolbars, not direct children
+        for widget in self.main_window.findChildren(QPushButton):
+            if getattr(widget, '_is_command', False):
+                widget.setStyleSheet(green_style)
+            elif getattr(widget, '_is_symbol', False):
+                widget.setStyleSheet(normal_style)
+
+            
+    def _get_symbol_icon(self, symbol_display, latex_code, size=24):
+        """
+        Get icon for a mathematical symbol
+        Compatibility wrapper for existing code
+        
+        Args:
+            symbol_display: Display text (not used, for compatibility)
+            latex_code: LaTeX code
+            size: Icon size in pixels
+        
+        Returns:
+            QIcon or None
+        """
+        return self.icons_manager.get_math_symbol_icon(latex_code, size)
+    
+    def _get_command_icon(self, command_display, latex_code, size=24):
+        """
+        Get icon for a LaTeX command
+        Compatibility wrapper for existing code
+        
+        Args:
+            command_display: Display text (not used, for compatibility)
+            latex_code: LaTeX code
+            size: Icon size in pixels
+        
+        Returns:
+            QIcon or None
+        """
+        return self.icons_manager.get_latex_command_icon(latex_code, size)
+    
+    def _create_text_icon(self, text, font_size=16):
+        """
+        Create a text-based icon
+        Delegates to icons_manager for consistency
+        
+        Args:
+            text: Text to render
+            font_size: Font size for the text
+        
+        Returns:
+            QIcon
+        """
+        return self.icons_manager._create_text_icon(text, font_size)
+
+
+        
+    def _create_arabic_actions(self):
+        """Create Arabic-related toolbar actions"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        
+        
+        
+        arabic_action = QAction(tr["insert_arabic_command"], self.main_window)        
+        arabic_action.setToolTip(tr["tooltip_arabic_command"])           
+        arabic_action.triggered.connect(self.open_arabic_command_dialog)
+        self.icons_manager.apply_icon_to_action(arabic_action, "arabic")
+        self.main_toolbar.addAction(arabic_action)
+
+
+
+        if hasattr(self, 'double_lang_action') or hasattr(self, 'bilingual'):
             try:
                 self.double_lang_action.triggered.disconnect()
             except Exception:
                 pass
 
-        self.double_lang_action = QAction(tr["double_lang_tool"], self.main_window)
-        self.double_lang_action.setShortcut("Alt+B")        
-        self.double_lang_action.setStatusTip(tr["status_double_lang_tool"])
-        self.double_lang_action.triggered.connect(self.open_double_language_dialog)
-        self.icons_manager.apply_icon_to_action(self.double_lang_action, "bilingual")        
-        latex_menu.addAction(self.double_lang_action)
+        double_lang_action = QAction(tr["bilingual"], self.main_window)
+        #self.double_lang_action.setShortcut("Alt+B")
+        #double_lang_action.setStatusTip(tr["status_double_lang_tool"])
+        double_lang_action.setToolTip(tr.get("tooltip_double_lang_tool", "A tool for inserting mixed Arabic/English text"))
+        double_lang_action.triggered.connect(self.main_window.menu_manager.open_double_language_dialog)
+        self.icons_manager.apply_icon_to_action(double_lang_action, "bilingual")
+        self.main_toolbar.addAction(double_lang_action)
 
-        # Toggle Text direction LR/RL
-        if hasattr(self, 'text_dir_action'):
-            self.main_window.toolbar_manager.text_dir_action.triggered.disconnect()  # Disconnect all connections
-            self.main_window.toolbar_manager.removeAction(self.main_window.toolbar_manager.text_dir_action)
-        text_dir_action = QAction(tr["direction"], self.main_window)
-        text_dir_action.setShortcut("Alt+D")
-        text_dir_action.setStatusTip(tr["status_direction"])
-        text_dir_action.triggered.connect(self.main_window.toggle_text_direction)      
-        self.icons_manager.apply_icon_to_action(text_dir_action, "direction")
-        latex_menu.addAction(text_dir_action)
 
-        latex_menu.addSeparator()
+
+        # # Toggle Text direction LR/RL
+        # if hasattr(self, 'text_dir_action'):
+            # self.text_dir_action.triggered.disconnect()  # Disconnect all connections
+            # self.main_toolbar.removeAction(self.text_dir_action)
         
-        math_menu = latex_menu.addMenu(f'{tr["insert_math"]}\tAlt+S')  
-        self.math_menu_builder.create_comprehensive_menu(math_menu)        
-        self.icons_manager.apply_icon_to_action(math_menu, "symbols")
-        latex_commands_menu = latex_menu.addMenu(f'{tr["insert_latex_commands"]}\tAlt+C')
-        self.latex_commands_menu_builder.create_comprehensive_menu(latex_commands_menu)
-        self.icons_manager.apply_icon_to_action(latex_commands_menu, "latex_commands")
+        # # Create new action
+        # self.text_dir_action = QAction(tr["direction"], self.main_window)
+        # self.text_dir_action.setToolTip(tr["tooltip_direction"])
+        # self.text_dir_action.setCheckable(False)
         
-        latex_menu.addSeparator()
+        # # Single connection only
+        # self.text_dir_action.triggered.connect(self.main_window.toggle_text_direction)
         
-        # Show Tree
-        tree = QAction(tr.get("show_tree", "Tree"), self.main_window)        
-        tree.setText(f'{tr["show_tree"]}\tAlt+R')
-        tree.setStatusTip(tr.get("status_tree", "Show/hide the document structure tree"))
-        tree.triggered.connect(self.main_window.toolbar_manager.toggle_tree_tab)
-        self.icons_manager.apply_icon_to_action(tree, "tree")
-        latex_menu.addAction(tree)        
-        # Show bookmarks
-        bookmarks = QAction(tr.get("bookmarks", "bookmarks"), self.main_window)        
-        bookmarks.setText(f'{tr["show_bookmarks"]}\tAlt+M')
-        bookmarks.setStatusTip(tr.get("status_show_bookmarks", "Show/hide bookmarks panel"))
-        bookmarks.triggered.connect(self.main_window.toolbar_manager.toggle_bookmarks_tab)
-        self.icons_manager.apply_icon_to_action(bookmarks, "bookmarks")
-        latex_menu.addAction(bookmarks)        
-        # Show terminal
-        terminal = QAction(tr.get("terminal", "terminal"), self.main_window)        
-        terminal.setText(f'{tr["show_terminal"]}\tAlt+N')
-        terminal.setStatusTip(tr.get("status_show_terminal", "Show/hide terminal output"))
-        terminal.triggered.connect(self.main_window.toolbar_manager.toggle_terminal_tab)  
-        self.icons_manager.apply_icon_to_action(terminal, "terminal")
-        latex_menu.addAction(terminal)        
+        # # Apply icon and add to toolbar
+        # self.icons_manager.apply_icon_to_action(self.text_dir_action, "direction")
+        # self.main_toolbar.addAction(self.text_dir_action)
+        #self.debug_signal_connections()        
 
-        self._setup_menu_close_protection()
+        
 
-    def open_double_language_dialog(self):
+    def handle_switch_layout(self):
+        """Handle layout switch with safety checks"""
+        try:
+            print("🔄 Starting layout switch...")
+            
+            # Check if we have necessary components
+            if not hasattr(self.main_window, 'layout_manager'):
+                #print("❌ No layout_manager found")
+                return
+                
+            # Perform the switch
+            self.main_window.layout_manager.switch_layout()
+            
+            # Note: Don't call toggle_side_panel_position separately
+            # Let switch_layout handle everything to avoid double rebuilds
+            
+            #print("✅ Layout switch completed")
+            
+        except Exception as e:
+            print(f"❌ Error in handle_switch_layout: {e}")
+            import traceback
+            traceback.print_exc()  
+            
+    def _create_view_actions(self):
+        """Create view-related toolbar actions"""
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
 
+        # Editor Layout - Now called "Tex Layout"
+        editor_layout_action = QAction(tr["tab_tex"], self.main_window)
+        #editor_layout_action.setShortcut("Ctrl+F3")  # Ctrl+F3 to avoid conflict
+        editor_layout_action.setToolTip(tr["tooltip_editor_layout"])
+        editor_layout_action.triggered.connect(self.main_window.layout_manager.toggle_editor_layout)
+        self.icons_manager.apply_icon_to_action(editor_layout_action, "editor_layout")
+        self.main_toolbar.addAction(editor_layout_action)
+
+        # Toggle PDF Layout
+        pdf_layout_action = QAction(tr["tab_pdf"], self.main_window)
+        #pdf_layout_action.setShortcut("Ctrl+F4")
+        pdf_layout_action.setToolTip(tr["tooltip_pdf_layout"])
+        pdf_layout_action.triggered.connect(self.main_window.layout_manager.toggle_pdf_layout)
+        self.icons_manager.apply_icon_to_action(pdf_layout_action, "pdf_layout")
+        self.main_toolbar.addAction(pdf_layout_action)
+        
+        
+        # Switch Layout
+        switch_layout_action = QAction(tr["switch_layout"], self.main_window)
+        #switch_layout_action.setShortcut("F4")
+        switch_layout_action.setToolTip(tr["tooltip_switch_layout"])
+        switch_layout_action.triggered.connect(self.handle_switch_layout)
+        self.icons_manager.apply_icon_to_action(switch_layout_action, "switch_layout")
+        self.main_toolbar.addAction(switch_layout_action)
+        
+
+
+
+    def _create_terminal_toggle(self):
+        """Create terminal toggle button"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]        
+        
+        terminal_action = QAction(tr["terminal_text"], self.main_window)
+        terminal_action.setToolTip(tr["tooltip_terminal"])
+        terminal_action.setCheckable(True)
+        terminal_action.setChecked(self.terminal_tab_visible)
+        terminal_action.triggered.connect(self.toggle_terminal_tab)
+        
+        # Use appropriate icon (you may need to add this icon to your icons_manager)
+        # If you don't have a terminal icon, you can use a generic icon or leave it blank
+        if hasattr(self.icons_manager, 'apply_icon_to_action'):
+            self.icons_manager.apply_icon_to_action(terminal_action, "terminal")
+        
+        self.main_toolbar.addAction(terminal_action)
+        self.terminal_action = terminal_action
+
+    def toggle_terminal_tab(self):
+        """Toggle the terminal tab visibility and sync with settings"""
+        self.terminal_tab_visible = not self.terminal_tab_visible
+        #self.terminal_action.setChecked(self.terminal_tab_visible)
+        
+        # Sync with main window
+        self.main_window.terminal_tab_visible = self.terminal_tab_visible
+        
+        # Update UI
+        output_container = self.main_window.layout_manager.output_container
+        if not output_container:
+            return
+        
+        if self.terminal_tab_visible:
+            # Ensure output container is visible when showing sub-tabs
+            self._ensure_output_visible()
+            self._add_terminal_tab(output_container)
+            self._focus_tab(output_container, "Terminal")
+        else:
+            self._remove_terminal_tab(output_container)
+        
+        # Notify settings dialog if open
+        self._notify_settings_dialog_update()
+
+    def _remove_terminal_tab(self, output_container):
+        """Remove terminal tab from output container"""
+        translations = self.main_window.translations
+
+        # Collect all possible labels for "symbols"
+        possible_labels = {"Terminal"}  # source text
+        for lang in translations:
+            possible_labels.add(translations[lang]["terminal"])                
+        
+        for i in range(output_container.count()):
+            if output_container.tabText(i) in possible_labels:
+                output_container.removeTab(i)
+                break
+                
+                
+    def _add_terminal_tab(self, output_container):
+        """Add terminal tab to output container"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]                
+        # Check if terminal tab already exists
+        for i in range(output_container.count()):
+            if output_container.tabText(i) == tr["terminal"]:
+                return  # Already exists
+        
+        # Create terminal widget if needed
+        if not hasattr(self.main_window.layout_manager, 'terminal_widget') or \
+           self.main_window.layout_manager.terminal_widget is None:
+            from terminal_widget import TerminalWidget  # Import your terminal widget
+            self.main_window.layout_manager.terminal_widget = TerminalWidget(self.main_window)
+        
+        # Add tab
+        terminal_widget = self.main_window.layout_manager.terminal_widget
+        output_container.addTab(terminal_widget, tr["terminal"])
+        
+        # Update working directory if there's a current file
+        if hasattr(self.main_window, 'editor_manager'):
+            current_file = self.main_window.editor_manager.get_current_file_path()
+            if current_file:
+                terminal_widget.set_working_directory(current_file)
+
+    
+    def _create_settings_actions(self):
+        """Create settings-related toolbar actions"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
+        
+        # Settings 
+        self.settings_action = QAction(tr["settings"], self.main_window) # Store as self.settings_action
+        
+        # Self.settings_action.setShortcut("Ctrl+F1,")
+        self.settings_action.setToolTip(tr["tooltip_settings"])
+        
+        # Connect to settings_manager
+        self.settings_action.triggered.connect(self.main_window.settings_manager.open_settings)
+        self.icons_manager.apply_icon_to_action(self.settings_action, "settings")
+        self.main_window.toolbar_settings_action = self.settings_action  # Backward compatibility
+        self.main_toolbar.addAction(self.settings_action)
+        
+        # Language Toggle  
+        self.lang_action = QAction(tr["language"], self.main_window) # Store as self.lang_action
+        self.lang_action.setToolTip(tr["tooltip_language"])
+        
+        
+
+            
+    def open_arabic_command_dialog(self):
+        """Open the Arabic command dialog"""
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]                                    
         current_editor = self.main_window.editor_manager.get_current_editor()
         current_file = self.main_window.editor_manager.get_current_file_path()
-
+            
         if not current_editor or not current_file:
             self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
             return
-
-        dialog = DoubleLanguagesInsertion(self.main_window, lang)
-
-        # ✅ Step 1 goes here
-        dialog.set_editor(current_editor)
-
-        # ✅ non-modal dialog
-        dialog.show()
-
-    def update_language(self):
-        """Update menus with current language"""
-        self.main_window.menus_initialized = False
-        self.create_menu_bar()
-
-    def _create_options_menu(self):
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]
-        options_menu = self.main_window.menuBar().addMenu("&"+self.main_window.translations[lang]["options_menu"])
-        settings_action = QAction(self.main_window.translations[lang]["settings"], self.main_window)
-        settings_action.setShortcut("F2")
-        settings_action.setStatusTip(tr["status_settings"])
-        settings_action.triggered.connect(self.main_window.settings_manager.open_settings)
-        self.icons_manager.apply_icon_to_action(settings_action, "settings")
-        options_menu.addAction(settings_action)
-
-        if lang == "ar":
-            self.main_window.menuBar().setLayoutDirection(Qt.RightToLeft)
-            self.main_window.is_rtl = True
-            self._setup_menu_close_protection()
-        else:
-            self.main_window.menuBar().setLayoutDirection(Qt.LeftToRight)
-            self.main_window.is_rtl = False
-            self._setup_menu_close_protection()
             
-        lang_action = QAction(self.main_window.translations[lang]["language"], self.main_window)
-        lang_action.setStatusTip(tr["status_language"])
-        lang_action.setShortcut("F4")
-        lang_action.triggered.connect(self.main_window.toggle_menu_language)
-        self.icons_manager.apply_icon_to_action(lang_action, "language")
-        options_menu.addAction(lang_action)
-
-        self._setup_menu_close_protection()
-
-    def refresh_current_pdf(self):
-        """Refresh the currently open PDF"""
-        current_file = self.editor_manager.current_file        
-        if not current_file:
+        if not ARABIC_DIALOG_AVAILABLE:
+            # Show info message if dialog is not available
+            title = tr["file_missing"]
+            message = tr["file_missing_message"]
+            QMessageBox.information(self.main_window, title, message)
             return
-        self.pdf_viewer.fit_width()
-        # Build PDF path
-        pdf_path = os.path.splitext(current_file)[0] + ".pdf"
-        if os.path.exists(pdf_path):
-            # Force reload in PDF manager
-            self.pdf_manager.load_pdf_in_viewer(pdf_path)
-        else:
-            # Show message in status bar
-            self.update_status_bar("PDF not found. Compile first.")
-
-    def update_recent_pdf_files_menu(self):
-        """Update the recent PDF files menu with current list"""
-        if not hasattr(self, 'recent_pdf_files_menu') or not self.recent_pdf_files_menu:
-            return
-
-        self.recent_pdf_files_menu.clear()
-        lang = self.main_window.menu_language
-
-        if not hasattr(self.main_window, 'config_manager'):
-            return
-
-        recent_pdf_files = self.main_window.config_manager.get_recent_pdf_files()
-
-        if not recent_pdf_files:
-            no_files_action = QAction(
-                self.main_window.translations[lang].get("no_recent_pdf_files", "No recent PDF files"),
-                self.main_window
-            )
-            no_files_action.setEnabled(False)
-            self.recent_pdf_files_menu.addAction(no_files_action)
-            return
-
-        from PyQt5.QtWidgets import (
-            QScrollArea, QWidget, QVBoxLayout, QHBoxLayout,
-            QToolButton, QWidgetAction, QSizePolicy
-        )
-        from PyQt5.QtCore import Qt
-
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setContentsMargins(2, 2, 2, 2)
-        scroll_layout.setSpacing(1)
-
-        for i, file_path in enumerate(recent_pdf_files[:100]):
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(0)
-
-            btn = QToolButton()
-            btn.setText(f"   {file_path}")
-            btn.setIcon(self.create_number_icon(i + 1))
-            btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-            btn.setToolTip(file_path)
-            btn.setStatusTip(
-                self.main_window.translations[lang].get(
-                    "open_recent_pdf_status", "Open this recent PDF file"
-                )
-            )
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setAutoRaise(True)
-            btn.setMinimumWidth(260)
-            btn.clicked.connect(
-                lambda checked, path=file_path: (
-                    self.force_close_all_menus(),
-                    #self.open_recent_pdf_file(path)
-                    QTimer.singleShot(0, lambda: self.open_recent_pdf_file(path))
-                )
-            )
-
-            remove_btn = QToolButton()
-            remove_btn.setText("⨉")
-            remove_btn.setAutoRaise(True)
-            remove_btn.setToolTip("Remove from recent PDF files")
-            remove_btn.setFixedWidth(28)
-            remove_btn.clicked.connect(
-                lambda checked, path=file_path: self._remove_recent_pdf_file_and_refresh(path)
-            )
-
-            row_layout.addWidget(btn)
-            row_layout.addWidget(remove_btn)
-            scroll_layout.addWidget(row_widget)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(scroll_widget)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setMaximumHeight(400)
-        scroll_area.setMinimumWidth(350)
-        scroll_area.setFrameShape(QScrollArea.NoFrame)
-
-        container_action = QWidgetAction(self.recent_pdf_files_menu)
-        container_action.setDefaultWidget(scroll_area)
-        self.recent_pdf_files_menu.addAction(container_action)
-
-        self.recent_pdf_files_menu.addSeparator()
-
-        clear_action = QAction(
-            self.main_window.translations[lang].get("clear_recent_pdf_files", "Clear Recent PDF Files"),
-            self.main_window
-        )
-        clear_action.setStatusTip(
-            self.main_window.translations[lang].get(
-                "clear_recent_pdf_files_status", "Remove all recent PDF files from the list"
-            )
-        )
-        clear_action.triggered.connect(self.clear_recent_pdf_files)
-        self.recent_pdf_files_menu.addAction(clear_action)
-
-    def force_close_all_menus(self):
-        """Forcibly close any open popup menu (including submenus)"""
-        from PyQt5.QtWidgets import QApplication, QMenu
-        # Close the active popup widget (the menu that is currently open)
-        popup = QApplication.activePopupWidget()
-        if popup and isinstance(popup, QMenu):
-            popup.close()
-        # Also close any top-level menus that might still be visible
-        for widget in QApplication.topLevelWidgets():
-            if widget.isVisible() and isinstance(widget, QMenu):
-                widget.close()
-        # Tell the menu bar to release its active action
-        menu_bar = self.main_window.menuBar()
-        if menu_bar:
-            menu_bar.setActiveAction(None)
-            menu_bar.clearFocus()
-        # Force Qt to process pending close events
-        QApplication.processEvents()
-
-    def _remove_recent_pdf_file_and_refresh(self, file_path):
-        """Remove a single PDF file from recent list and refresh the menu."""
-        if hasattr(self.main_window, 'config_manager'):
-            self.main_window.config_manager.remove_recent_pdf_file(file_path)
-        self.update_recent_pdf_files_menu()
+        
+        # Open the dialog if available
+        dialog = ArabicCommandDialog(self.main_window, self.main_window.menu_language)
+        
+        if dialog.exec_() == dialog.Accepted:
+            latex_command = dialog.get_latex_command()
+            if latex_command:
+                # Insert the LaTeX command into the current editor
+                current_editor = self.main_window.editor_manager.get_current_editor()
+                if current_editor:
+                    cursor = current_editor.textCursor()
+                    cursor.insertText(latex_command)
+                    current_editor.setFocus()
+                    
+                    # Mark as modified
+                    self.main_window.editor_manager.on_text_changed()
+                    
+                    # Update status
+                    status_msg = tr["status_inserted_arabic_command"].format(latex_command=latex_command)
+                    self.main_window.update_status_bar(status_msg)
+                else:
+                    # No editor available - show message
+                    if lang == "ar":
+                        QMessageBox.information(self.main_window, "تنبيه", "لا يوجد محرر مفتوح لإدراج الأمر.")
+                    else:
+                        QMessageBox.information(self.main_window, "Notice", "No editor available to insert command.")
+        
         
     
-    # def open_recent_pdf_file(self, file_path):
-        # """Open a PDF from the recent files list"""
-        # if not os.path.exists(file_path):
-            # print(f"❌ Recent PDF file not found: {file_path}")
-            # # Remove from recent list since it doesn't exist
-            # if hasattr(self.main_window, 'config_manager'):
-                # self.main_window.config_manager.remove_recent_pdf_file(file_path)
-                # # Update menu to reflect the removal
-                # if hasattr(self.main_window, 'menu_manager') and hasattr(self.main_window.menu_manager, 'update_recent_pdf_files_menu'):
-                    # self.main_window.menu_manager.update_recent_pdf_files_menu()
-            # return None
-        # # Load the PDF
-        # viewer = self.main_window.pdf_manager.load_pdf_in_viewer(file_path)
-        # if viewer:
-            # # Move to top of recent list (since it was accessed again)
-            # if hasattr(self.main_window, 'config_manager'):
-                # self.main_window.config_manager.add_recent_pdf_file(file_path)
-            # # Update menu
-            # if hasattr(self.main_window, 'menu_manager') and hasattr(self.main_window.menu_manager, 'update_recent_pdf_files_menu'):
-                # self.main_window.menu_manager.update_recent_pdf_files_menu()
-            # self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
-        # return viewer
-
-    def open_recent_pdf_file(self, file_path):
-        """Open a recent PDF file with wait cursor for large PDFs"""
-        from PyQt5.QtWidgets import QApplication
-        from PyQt5.QtCore import Qt
-
-        if not os.path.exists(file_path):
-            print(f"❌ Recent PDF file not found: {file_path}")
-            if hasattr(self.main_window, 'config_manager'):
-                self.main_window.config_manager.remove_recent_pdf_file(file_path)
-                if hasattr(self.main_window, 'menu_manager'):
-                    self.main_window.menu_manager.update_recent_pdf_files_menu()
-            return None
-
-        # --- Show wait cursor ---
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
-
-        try:
-            # Load the PDF (may take time for large files)
-            viewer = self.main_window.pdf_manager.load_pdf_in_viewer(file_path)
-            if viewer:
-                # Move to top of recent list
-                if hasattr(self.main_window, 'config_manager'):
-                    self.main_window.config_manager.add_recent_pdf_file(file_path)
-                # Update menu
-                if hasattr(self.main_window, 'menu_manager'):
-                    self.main_window.menu_manager.update_recent_pdf_files_menu()
-                self.main_window.update_status_bar(f"Recent PDF opened: {os.path.basename(file_path)}")
-            return viewer
-        finally:
-            # Restore normal cursor
-            QApplication.restoreOverrideCursor()
-
-    def remove_recent_pdf_file(self, file_path):
-        """Remove a specific PDF file from the recent list."""
-        if not file_path:
+    def update_toolbar_font(self, font_family=None, font_size=None):
+        """Update toolbar font family and/or size"""
+        if not self.main_toolbar:
             return
-        try:
-            abs_path = os.path.abspath(file_path)
-            current_files = self.get_recent_pdf_files(max_count=100)
-            if abs_path in current_files:
-                current_files.remove(abs_path)
-                self._save_recent_pdf_files(current_files[:self.recent_pdf_files_limit])
-        except Exception as e:
-            print(f"❌ Error removing recent PDF file: {e}")
-
-    def clear_recent_pdf_files(self):
-        """Clear all recent PDF files from the list."""
-        from PyQt5.QtWidgets import QMessageBox, QTabWidget
-        # ✅ Add confirmation dialog
-        reply = QMessageBox.question(
-            self.main_window,
-            "Clear Recent PDF Files",
-            "Are you sure you want to clear all recent PDF files?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            try:
-                # ✅ FIX: Access config through config_manager
-                if hasattr(self.main_window, 'config_manager'):
-                    self.main_window.config_manager.clear_recent_pdf_files()
-                    # Update the menu to reflect changes
-                    self.update_recent_pdf_files_menu()
-                    # Refresh the PDF welcome page immediately if it is currently showing.
-                    # pdf_tabs.widget(0) can carry any of these objectNames depending
-                    # on which code path created the welcome tab.
-                    pm = getattr(self.main_window, 'pdf_manager', None)
-                    if pm:
-                        pdf_tabs = getattr(pm, 'pdf_tabs', None)
-                        welcome_showing = False
-                        if isinstance(pdf_tabs, QTabWidget):
-                            if pdf_tabs.count() == 1:
-                                w = pdf_tabs.widget(0)
-                                if w and w.objectName() in (
-                                    "pdf_welcome_outer_frame",
-                                    "pdf_welcome_widget",
-                                    "pdf_welcome_tab",
-                                ):
-                                    welcome_showing = True
-                        if welcome_showing:
-                            QTimer.singleShot(0, pm._show_pdf_welcome_tab)
-                else:
-                    QMessageBox.warning(
-                        self.main_window,
-                        "Error",
-                        "Configuration manager not available."
-                    )
-            except Exception as e:
-                print(f"❌ Error clearing recent PDF files: {e}")
-                QMessageBox.critical(
-                    self.main_window,
-                    "Error",
-                    f"Failed to clear recent PDF files:\n{str(e)}"
-                )
-
-    def get_recent_pdf_files_for_menu(self):
-        """Get recent PDF files formatted for menu display with existence check."""
-        recent_files = self.get_recent_pdf_files()
-        menu_items = []
-        for i, file_path in enumerate(recent_files, 1):
-            # Extract just the filename for display
-            filename = os.path.basename(file_path)
-            # Check if file still exists
-            if os.path.exists(file_path):
-                menu_items.append(f"{i}. {filename}")
-            else:
-                menu_items.append(f"{i}. {filename} (missing)")
-        return menu_items, recent_files  
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Master Document helpers
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _update_master_actions_state(self):
-        """Enable/disable and relabel master document menu actions."""
-        em = self.main_window.editor_manager
-        current_file  = em.get_current_file_path()
-        master_file   = em.get_master_document()
-        has_tex_open  = bool(current_file and current_file.lower().endswith('.tex'))
-
-        # "Set as Master" — enabled when a saved .tex file is active AND it is
-        # not already the master.
-        already_master = (master_file is not None and master_file == current_file)
-        self.set_master_action.setEnabled(has_tex_open and not already_master)
-
-        # Show which file is currently the master in the action text
-        if master_file:
-            label = self.main_window.translations[self.main_window.menu_language].get(
-                "set_master_document", "Set as Master Document"
-            )
-            self.set_master_action.setText(label)
-            self.clear_master_action.setEnabled(True)
-            self.clear_master_action.setText(
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "clear_master_document", "Clear Master Document"
-                ) + f"  [{os.path.basename(master_file)}]"
-            )
-        else:
-            self.set_master_action.setText(
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "set_master_document", "Set as Master Document"
-                )
-            )
-            self.clear_master_action.setEnabled(False)
-            self.clear_master_action.setText(
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "clear_master_document", "Clear Master Document"
-                )
-            )
-
-    def _set_master_document(self):
-        """Slot: set the currently active .tex file as the master document."""
-        em = self.main_window.editor_manager
-        current_file = em.get_current_file_path()
-
-        if not current_file:
-            QMessageBox.warning(
-                self.main_window,
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "no_file_open", "No file open"
-                ),
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "open_a_latex_file",
-                    "Please open a LaTeX file first."
-                )
-            )
-            return
-
-        try:
-            em.set_master_document(current_file)
-            self._update_master_actions_state()
-            QMessageBox.information(
-                self.main_window.window(),
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "master_document_set", "Master Document Set"
-                ),
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "master_document_set_msg",
-                    "Master document set to:\n{file}\n\n"
-                    "Compilation will now always use this file, regardless of "
-                    "which tab is active."
-                ).format(file=current_file)
-            )
-        except ValueError as e:
-            QMessageBox.warning(self.main_window.window(), "Master Document", str(e))
-
-    def _clear_master_document(self):
-        """Slot: remove the master document designation."""
-        em = self.main_window.editor_manager
-        old_master = em.get_master_document()
-        em.clear_master_document()
-        self._update_master_actions_state()
-        if old_master:
-            QMessageBox.information(
-                self.main_window.window(),
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "master_document_cleared", "Master Document Cleared"
-                ),
-                self.main_window.translations[self.main_window.menu_language].get(
-                    "master_document_cleared_msg",
-                    "Master document designation removed.\n\n"
-                    "Compilation will now target the foreground (active) file."
-                )
-            )
-
+        
+        # Get current settings as fallback
+        current_fonts = self.main_window.get_current_font_settings()
+        
+        if font_family is None:
+            font_family = current_fonts.get('ui_font_family', 'Arial')
+        if font_size is None:
+            font_size = current_fonts.get('toolbar_font_size', 10)
+        
+        font = QFont(font_family, int(font_size))
+        self.main_toolbar.setFont(font)
+        
+        # Apply to all toolbar buttons
+        self._apply_font_to_toolbar_buttons(font)
+        
+        #print(f"Toolbar font updated: {font_family}, size {font_size}")
+    
+        
     def show_error(self, title, message):
-        """Show error message dialog"""
-        QMessageBox.critical(self.main_window, title, message)
-
-    def _create_help_menu(self):
+        """Show error message dialog with translated button."""
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
-        help_menu = self.main_window.menuBar().addMenu("&"+tr.get("help", "Help"))
-        
-        
-        plugin_help_action = QAction("&"+tr.get("how_to_make_tikz_plugins", "How to Make Tikz Plugins"), self.main_window)
-        plugin_help_action.setStatusTip(tr.get("status_how_to_make_tikz_plugins", "Learn how to create custom TikZ plugins"))
-        plugin_help_action.triggered.connect(self.show_plugins_help)
-        help_menu.addAction(plugin_help_action)
-        
-        help_menu.addSeparator()
-        
-        shortcuts_action = QAction("&"+tr.get("keyboard_shortcuts", "Keyboard Shortcuts"), self.main_window)
-        shortcuts_action.setShortcut("Ctrl+F1")
-        shortcuts_action.setStatusTip(tr.get("status_keyboard_shortcuts", "View all keyboard shortcuts"))
-        shortcuts_action.triggered.connect(self.show_shortcuts_help)
-        help_menu.addAction(shortcuts_action)
-        
-        help_menu.addSeparator()
-        
-        tip_day_action = QAction("&"+tr.get("tip_of_the_day", "Tip of the day"), self.main_window)        
-        tip_day_action.setStatusTip(tr.get("status_show_tip_of_the_day", "Show tip of the day"))        
-        tip_day_action.triggered.connect(lambda: self.main_window.show_tip_of_the_day(force=True))
-        help_menu.addAction(tip_day_action)
-        
-        help_menu.addSeparator()
 
-        log_action = QAction("&" + tr.get("view_ayntex_error_log", "View AynTex Error Log"), self.main_window)
-        log_action.setStatusTip(tr.get("status_view_ayntex_error_log", "View AynTex error and freeze log"))
-        log_action.triggered.connect(lambda: ErrorsManager.open_log_viewer(parent=self.main_window))
-        help_menu.addAction(log_action)
+        msg_box = QMessageBox(self.main_window)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
 
-        # QAction has no aboutToShow — attach to the menu instead
-        help_menu.aboutToShow.connect(lambda: log_action.setText(
-            "&" + tr.get("view_ayntex_error_log", "View AynTex Error Log") + ("  ⚠" if ErrorsManager.has_errors() else "")
-        ))
+        # Add a single OK button with translated text
+        ok_button = msg_box.addButton(tr.get("ok", "OK"), QMessageBox.AcceptRole)
+        msg_box.setDefaultButton(ok_button)
+
+        msg_box.exec_()        
+    
+    def _refresh_symbols_tab(self):
+        """Refresh symbols tab with current language"""
+        output_container = self.main_window.layout_manager.output_container
+        if output_container and output_container.has_tab("Symbols"):
+            self._remove_symbols_tab(output_container)
+            self._add_symbols_tab(output_container)
+    
+    def _refresh_commands_tab(self):
+        """Refresh commands tab with current language"""
+        output_container = self.main_window.layout_manager.output_container
+        if output_container and output_container.has_tab("Commands"):
+            self._remove_commands_tab(output_container)
+            self._add_commands_tab(output_container)
+
+
+
         
-        help_menu.addSeparator()        
+
+# Custom widget for symbol/command buttons with enhanced features
+
+class SymbolCommandButton(QPushButton):
+    """Enhanced button for symbols and commands with context menu"""
+    def __init__(self, display_text, latex_code, description, button_type="symbol", 
+                 icons_manager=None, icon_size=24):
+        """
+        Initialize enhanced symbol/command button
         
-        about_action = QAction(tr.get("about", "About AynTex"), self.main_window)
-        about_action.setShortcut("F1")
-        about_action.setStatusTip(tr.get("status_about", "Information about AynTeX"))
-        about_action.triggered.connect(self.show_about_dialog)
-        self.icons_manager.apply_icon_to_action(about_action, "help")
-        help_menu.addAction(about_action)
+        Args:
+            display_text: Text to display on button
+            latex_code: LaTeX code to insert
+            description: Description for tooltip
+            button_type: "symbol" or "command"
+            icons_manager: IconsManager instance
+            icon_size: Size of the icon
+        """
+        super().__init__()
+        self.display_text = display_text
+        self.latex_code = latex_code
+        self.description = description
+        self.button_type = button_type
+        self.icons_manager = icons_manager
+        self.icon_size = icon_size
         
-        self._setup_menu_close_protection()
+        self.setup_button()
+        self.setup_context_menu()
 
-    def show_plugins_help(self):
-        """Show the plugin creation help dialog"""
-        from help_manager import PluginHelpDialog
-        dialog = PluginHelpDialog(self.main_window)
-        dialog.exec_()
+    def setup_button(self):
+        """Setup button appearance with icons from IconsManager"""
+        self.setToolTip(f"{self.description}\nInsert: {self.latex_code}\nRight-click for options")
+        
+        # Set size constraints based on button type
+        if self.button_type == "symbol":
+            self.setMaximumSize(60, 40)
+            self.setMinimumSize(40, 30)
+        else:  # command
+            self.setMaximumSize(120, 40)
+            self.setMinimumSize(80, 30)
+        
+        # Try to load icon from IconsManager
+        if self.icons_manager:
+            if self.button_type == "symbol":
+                icon = self.icons_manager.get_math_symbol_icon(self.latex_code, self.icon_size)
+            else:
+                icon = self.icons_manager.get_latex_command_icon(self.latex_code, self.icon_size)
+            
+            if icon and not icon.isNull():
+                self.setIcon(icon)
+                self.setIconSize(QSize(self.icon_size, self.icon_size))
+            else:
+                self.setText(self.display_text)
+        else:
+            # No icons manager, use text
+            self.setText(self.display_text)
+        
+        # Apply styling
+        self.setStyleSheet("""
+            SymbolCommandButton {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                background-color: #f9f9f9;
+                font-weight: bold;
+            }
+            SymbolCommandButton:hover {
+                background-color: #e9e9e9;
+                border-color: #999;
+            }
+            SymbolCommandButton:pressed {
+                background-color: #d9d9d9;
+            }
+        """)
+    
+    def setup_context_menu(self):
+        """Setup context menu for additional options"""
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+    
+    def show_context_menu(self, position):
+        """Show context menu with additional options"""
+        menu = QMenu(self)
+        
+        # Copy LaTeX code action
+        copy_action = menu.addAction("Copy LaTeX Code")
+        copy_action.triggered.connect(self.copy_latex_code)
+        
+        # Copy symbol/command display
+        copy_display_action = menu.addAction("Copy Display Text")
+        copy_display_action.triggered.connect(self.copy_display_text)
+        
+        # Add to favorites (if favorites system exists)
+        if hasattr(self.parent(), 'add_to_favorites'):
+            favorite_action = menu.addAction("Add to Favorites")
+            favorite_action.triggered.connect(self.add_to_favorites)
+        
+        # Show description
+        menu.addSeparator()
+        desc_action = menu.addAction(f"Description: {self.description}")
+        desc_action.setEnabled(False)
+        
+        menu.exec_(self.mapToGlobal(position))
+    
+    def copy_latex_code(self):
+        """Copy LaTeX code to clipboard"""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.latex_code)
+    
+    def copy_display_text(self):
+        """Copy display text to clipboard"""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.display_text)
+    
+    def add_to_favorites(self):
+        """Add this symbol/command to favorites (if implemented)"""
+        if hasattr(self.parent(), 'add_to_favorites'):
+            self.parent().add_to_favorites(self.latex_code, self.display_text, 
+                                          self.description, self.button_type)
 
-    def show_about_dialog(self):
-        """Show the about dialog"""
-        from help_manager import AboutDialog
-        dialog = AboutDialog(self.main_window)
-        dialog.exec_()
 
-    def show_shortcuts_help(self):
-        from help_manager import ShortcutsDialog
-        dialog = ShortcutsDialog(self.main_window)
-        dialog.exec_()
+
+
+def _build_tree_stylesheet(s: dict, obj_name: str = "") -> str:
+    """Build a theme-aware QTreeWidget stylesheet.
+    When obj_name is supplied the selectors are ID-qualified (#name),
+    giving them higher specificity than the global app stylesheet."""
+    sel  = f"QTreeWidget#{obj_name}" if obj_name else "QTreeWidget"
+    hsel = f"QHeaderView::section"   # header is always global enough
+
+    return f"""
+        {sel} {{
+            border: 1px solid {s['border']};
+            background-color: {s['bg']};
+            font-size: 11px;
+        }}
+        {sel}::item {{
+            padding: 3px;
+            border-bottom: 1px solid {s['item_border']};
+        }}
+        {sel}::item:hover {{
+            background-color: {s['hover_bg']};
+        }}
+        {sel}::item:selected {{
+            background-color: {s['selected_bg']};
+            color: {s['selected_color']};
+        }}
+        {sel} QHeaderView::section {{
+            background-color: {s['header_bg']};
+            color: {s['header_color']};
+            border: 1px solid {s['header_border']};
+            padding: 3px;
+        }}
+        {sel}::branch {{
+            background: transparent;
+            border: none;
+        }}
+    """
+
+# New DocumentTreeWidget class for the Tree tab
+class DocumentTreeWidget(QTreeWidget):
+    """Tree widget showing LaTeX document structure"""
+   
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.setObjectName("document_tree")   
+        self.setHeaderLabels(["Structure", "Line"])
+        self.setRootIsDecorated(True)
+        self.setAlternatingRowColors(True)
+        
+        # Enhanced tree styling
+        self.setIndentation(20)  # Increase indentation for better hierarchy visualization
+
+        # ✅ Apply UI font
+        self.update_font()
+        
+        # Apply theme-aware stylesheet instead of hardcoded colors
+        self.refresh_theme()
+        
+        # Single click on any column navigates to line
+        self.itemClicked.connect(self._on_item_clicked)
+        # Double click also navigates (for accessibility)
+        self.itemDoubleClicked.connect(self.go_to_line)
+
+        # ✅ Connect expand/collapse signals to update icons
+        self.itemExpanded.connect(self._on_item_expanded)
+        self.itemCollapsed.connect(self._on_item_collapsed)
+
+        # ✅ Context menu with "Copy Tree" action
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_tree_context_menu)
+
+
+    def refresh_theme(self):
+        from style_manager import get_tree_widget_style
+        s = get_tree_widget_style()
+        self.setStyleSheet(_build_tree_stylesheet(s, obj_name="document_tree"))  # ← ID-qualified
+        # Force Qt to re-evaluate immediately
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+        
+    def update_font(self):
+        """Update tree font to match interface font"""
+        if hasattr(self.main_window, 'get_current_font_settings'):
+            current_fonts = self.main_window.get_current_font_settings()
+            ui_font_family = current_fonts.get('ui_font_family', 'Arial')
+            ui_font_size = current_fonts.get('toolbar_font_size', 10)
+        else:
+            ui_font_family = getattr(self.main_window, 'ui_font_family', 'Arial')
+            ui_font_size = getattr(self.main_window, 'toolbar_font_size', 10)
+
+        ui_font = QFont(ui_font_family, ui_font_size)
+        self.setFont(ui_font)
+        self.header().setFont(ui_font)
+#########
+    def _on_item_expanded(self, item):
+        """Update icon to downward triangle when expanded"""
+        level = item.data(0, Qt.UserRole + 1)  # Retrieve stored level
+        if level is not None:
+            icon = self._create_triangle_icon(level, expanded=True)
+            item.setIcon(0, icon)
+            
+    def _on_item_collapsed(self, item):
+        """Update icon to right-pointing triangle when collapsed"""
+        level = item.data(0, Qt.UserRole + 1)  # Retrieve stored level
+        if level is not None:
+            icon = self._create_triangle_icon(level, expanded=False)
+            item.setIcon(0, icon)
+
+    def _create_triangle_icon(self, level, expanded=False):
+        """Create a triangle icon that points right (collapsed) or down (expanded)"""
+        size = max(6, 12 - level * 1.5)
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        base_color = QColor(52, 152, 219)
+        factor = max(80, 150 - level * 10)
+        color = base_color.lighter(int(factor))
+
+        cx = 8.0  # center x
+        cy = 8.0  # center y
+        half = size / 2
+
+        path = QPainterPath()
+
+        if expanded:
+            # ▼ Downward-pointing triangle
+            path.moveTo(cx - half, cy - half * 0.5)
+            path.lineTo(cx + half, cy - half * 0.5)
+            path.lineTo(cx, cy + half * 0.5)
+        else:
+            # ▶ Right-pointing triangle
+            path.moveTo(cx - half * 0.5, cy - half)
+            path.lineTo(cx + half * 0.5, cy)
+            path.lineTo(cx - half * 0.5, cy + half)
+
+        path.closeSubpath()
+        painter.fillPath(path, color)
+        painter.end()
+
+        return QIcon(pixmap)      
+
+    def _add_placeholder_item(self, text, level):
+        """Add a placeholder item when no content is available"""
+        item = QTreeWidgetItem([text, ""])
+        item.setData(0, Qt.UserRole, None)
+        item.setData(0, Qt.UserRole + 1, level)  # ✅ Store level
+        icon = self._create_triangle_icon(level, expanded=False)
+        item.setIcon(0, icon)
+        self.addTopLevelItem(item)
+
+    def parse_latex_structure(self, content):
+        """Parse LaTeX content and build tree structure"""
+        lines = content.split('\n')
+
+        structure_patterns = [
+            (r'\\part\*?{([^}]*)}', 'Part', 0),
+            (r'\\chapter\*?{([^}]*)}', 'Chapter', 1),
+            (r'\\section\*?{([^}]*)}', 'Section', 2),
+            (r'\\subsection\*?{([^}]*)}', 'Subsection', 3),
+            (r'\\subsubsection\*?{([^}]*)}', 'Subsubsection', 4),
+            (r'\\paragraph\*?{([^}]*)}', 'Paragraph', 5),
+        ]
+
+        import re
+        stack = []
+
+        for line_num, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line or line.startswith('%'):
+                continue
+
+            for pattern, item_type, level in structure_patterns:
+                match = re.search(pattern, line)
+                if match:
+                    title = match.group(1) or item_type
+                    display_text = title
+
+                    item = QTreeWidgetItem([display_text, str(line_num)])
+                    item.setData(0, Qt.UserRole, line_num)        # line number
+                    item.setData(0, Qt.UserRole + 1, level)       # ✅ Store level
+
+                    # Set initial icon (collapsed = right-pointing)
+                    icon = self._create_triangle_icon(level, expanded=False)
+                    item.setIcon(0, icon)
+
+                    if level > 2:
+                        indent_prefix = "  " * (level - 2)
+                        item.setText(0, indent_prefix + display_text)
+
+                    # Handle hierarchy
+                    while stack and stack[-1][1] >= level:
+                        stack.pop()
+
+                    if stack:
+                        stack[-1][0].addChild(item)
+                    else:
+                        self.addTopLevelItem(item)
+
+                    stack.append((item, level))
+                    break
+
+        if self.topLevelItemCount() == 0:
+            self._add_placeholder_item("No document structure found", 0)
+        else:
+            # ✅ Expand all and then update icons to show downward triangles
+            self.expandAll()
+            self._update_all_icons_after_expand()
+            self.resizeColumnToContents(0)
+            self.resizeColumnToContents(1)
+
+    def _update_all_icons_after_expand(self):
+        """Update all item icons after expandAll to show correct triangle direction"""
+        def update_item(item):
+            level = item.data(0, Qt.UserRole + 1)
+            if level is not None:
+                has_children = item.childCount() > 0
+                is_expanded = item.isExpanded()
+                icon = self._create_triangle_icon(
+                    level,
+                    expanded=(has_children and is_expanded)
+                )
+                item.setIcon(0, icon)
+
+            for i in range(item.childCount()):
+                update_item(item.child(i))
+
+        for i in range(self.topLevelItemCount()):
+            update_item(self.topLevelItem(i))
+
+    def refresh_tree(self):
+        """Refresh the tree with current document structure"""
+        self.clear()
+        if not hasattr(self.main_window, 'editor_manager'):
+            self._add_placeholder_item("No editor manager available", 0)
+            return
+
+        current_editor = self.main_window.editor_manager.get_current_editor()
+        if not current_editor:
+            self._add_placeholder_item("No document open", 0)
+            return
+
+        try:
+            content = current_editor.toPlainText()
+            if not content.strip():
+                self._add_placeholder_item("Document is empty", 0)
+                return
+            self.parse_latex_structure(content)
+        except Exception as e:
+            self._add_placeholder_item(f"Error parsing document: {str(e)}", 0)
+
+    def _show_tree_context_menu(self, position):
+        """Show right-click menu for the document tree"""
+        menu = QMenu(self)
+
+        copy_tree_action = menu.addAction("Copy Tree")
+        copy_tree_action.setEnabled(self._has_real_structure())
+        copy_tree_action.triggered.connect(self.copy_tree_to_clipboard)
+
+        item = self.itemAt(position)
+        if item is not None and item.data(0, Qt.UserRole) is not None:
+            menu.addSeparator()
+            copy_title_action = menu.addAction("Copy Entry")
+            copy_title_action.triggered.connect(lambda: self._copy_single_item(item))
+
+        menu.exec_(self.mapToGlobal(position))
+
+    def _has_real_structure(self):
+        """Return True if the tree currently shows actual document structure
+        (as opposed to a placeholder message like 'No document open')."""
+        if self.topLevelItemCount() == 0:
+            return False
+        if self.topLevelItemCount() == 1:
+            only_item = self.topLevelItem(0)
+            if only_item.childCount() == 0 and only_item.data(0, Qt.UserRole) is None:
+                return False
+        return True
+
+    def _copy_single_item(self, item):
+        """Copy a single entry's title (without the tree's manual indent hack)"""
+        QApplication.clipboard().setText(item.text(0).strip())
+
+    def _build_tree_lines(self, item, number_prefix, depth, lines):
+        """Recursively build numbered, indented text lines for one item and its children"""
+        title = item.text(0).strip()
+        indent = "    " * depth
+        number_str = ".".join(str(n) for n in number_prefix)
+        lines.append(f"{indent}{number_str}  {title}")
+
+        for i in range(item.childCount()):
+            child = item.child(i)
+            self._build_tree_lines(child, number_prefix + [i + 1], depth + 1, lines)
+
+    def get_tree_as_text(self):
+        """Serialize the whole tree to plain text with correct numbering and indentation,
+        based on the tree's actual (visual) hierarchy rather than the raw LaTeX levels."""
+        if not self._has_real_structure():
+            # Nothing but a placeholder message ("No document open", etc.)
+            return self.topLevelItem(0).text(0).strip() if self.topLevelItemCount() else ""
+
+        lines = []
+        for i in range(self.topLevelItemCount()):
+            top_item = self.topLevelItem(i)
+            self._build_tree_lines(top_item, [i + 1], 0, lines)
+        return "\n".join(lines)
+
+    def copy_tree_to_clipboard(self):
+        """Copy the entire tree (numbering + indentation) to the system clipboard"""
+        text = self.get_tree_as_text()
+        if text:
+            QApplication.clipboard().setText(text)
+
+###################            
+    def _on_item_clicked(self, item, column):
+        """Handle single click - navigate on Line column, expand/collapse on Structure column"""
+        if column == 1:
+            # Clicked on "Line" column - always navigate
+            self.go_to_line(item, column)
+        elif column == 0:
+            # Clicked on "Structure" column - navigate AND toggle expand
+            # The tree already handles expand/collapse automatically,
+            # so we just navigate to the line as well
+            self.go_to_line(item, column)
+    
+    
+    def _create_section_icon(self, section_type, level):
+        """Create specific icons for different section types"""
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+        
+        painter = QPainter(pixmap)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Define colors and symbols for different section types
+            type_config = {
+                'Part': ('P', Qt.darkRed, 14),
+                'Chapter': ('C', Qt.darkBlue, 12),
+                'Section': ('§', Qt.darkGreen, 11),
+                'Subsection': ('s', Qt.blue, 10),
+                'Subsubsection': ('ss', Qt.darkCyan, 9),
+                'Paragraph': ('¶', Qt.darkMagenta, 8),
+                'Environment': ('{ }', Qt.darkGray, 8),
+                'Label': ('L', Qt.darkYellow, 8)
+            }
+            
+            if section_type in type_config:
+                symbol, color, font_size = type_config[section_type]
+                
+                # Draw background circle
+                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(color.lighter(150), 1))
+                painter.drawEllipse(1, 1, 14, 14)
+                
+                # Draw symbol
+                font = QFont()
+                font.setPointSize(font_size)                        
+                font.setBold(True)
+                painter.setFont(font)
+                painter.setPen(QPen(Qt.white))
+                painter.drawText(2, 2, 12, 12, Qt.AlignCenter, symbol)
+            else:
+                # Default triangle for unknown types
+                return self._create_triangle_icon(level)
+        finally:
+            painter.end()
+        return QIcon(pixmap)
+    
+    
+    def go_to_line(self, item, column):
+        """Go to the line number when item is double-clicked - precise version"""
+        line_number = item.data(0, Qt.UserRole)
+        if line_number and hasattr(self.main_window, 'editor_manager'):
+            current_editor = self.main_window.editor_manager.get_current_editor()
+            if current_editor:
+                from PyQt5.QtGui import QTextCursor
+                # More precise line navigation
+                cursor = current_editor.textCursor()
+                cursor.movePosition(QTextCursor.Start)
+                for _ in range(line_number - 1):
+                    cursor.movePosition(QTextCursor.NextBlock)
+                current_editor.setTextCursor(cursor)
+                current_editor.ensureCursorVisible()  # Ensure cursor is visible
+                current_editor.setFocus()
+                
+                
+                # Update status bar - FIXED
+                lang = self.main_window.menu_language
+                translations = self.main_window.translations
+                status_template = translations[lang].get("status_go_to_line", "Go to line: {line}")
+                status_msg = status_template.format(line=line_number)
+                if hasattr(self.main_window, 'update_status_bar'):
+                    self.main_window.update_status_bar(status_msg)
+
+                # lang = getattr(self.main_window, 'menu_language', 'en')
+                # if lang == "ar":
+                    # status_msg = f"الانتقال إلى السطر: {line_number}"
+                # else:
+                    # status_msg = f"Go to line: {line_number}"
+                # if hasattr(self.main_window, 'update_status_bar'):
+                    # self.main_window.update_status_bar(status_msg)
+
+class BookmarkItem:
+    """Represents a single bookmark"""
+    
+    def __init__(self, line_number, text_snippet, editor_file_path=None):
+        self.line_number = line_number
+        self.text_snippet = text_snippet.strip()[:60]  # Limit snippet length
+        self.editor_file_path = editor_file_path
+        self.file_name = self._extract_file_name(editor_file_path)
+        self.timestamp = None  # Could add timestamp if needed
+    
+    def _extract_file_name(self, file_path):
+        """Extract just the filename from full path"""
+        if not file_path:
+            return "Untitled"
+        import os
+        return os.path.basename(file_path)
+    
+    def __str__(self):
+        return f"Line {self.line_number}: {self.text_snippet}"
+
+class BookmarksWidget(QWidget):
+    """Widget containing the bookmarks list and controls"""
+
+    bookmark_clicked = pyqtSignal(int, str)  # Signal emitted when bookmark is clicked
+    
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.bookmarks = {}  # Dictionary: line_number -> BookmarkItem
+        self.setup_ui()
+        # ✅ Apply UI font after setup
+        self.update_font()
+        
+    def setup_ui(self):
+        """Setup the bookmarks widget UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Header with title and controls
+        header_layout = QHBoxLayout()
+
+        # ✅ Get UI font
+        ui_font = self._get_ui_font()
+
+        
+        # Title
+        
+        title_label = QLabel(self.tr("bookmarks"))
+        title_font = QFont(ui_font)           # ✅ Use UI font family
+        title_font.setPointSize(ui_font.pointSize() + 2)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        header_layout.addWidget(title_label)
+        
+        header_layout.addStretch()
+        
+        # Clear all button
+        clear_btn = QPushButton(self.tr("clear_all"))
+        clear_btn.setMaximumWidth(80)
+        clear_btn.setFont(ui_font)            
+        clear_btn.clicked.connect(self.clear_all_bookmarks)
+        header_layout.addWidget(clear_btn)
+        
+        layout.addLayout(header_layout)
+        
+        # Bookmarks tree (replacing simple list)
+        from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem
+        self.bookmarks_tree = QTreeWidget()
+        self.bookmarks_tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.bookmarks_tree.setAlternatingRowColors(True)
+        self.bookmarks_tree.setHeaderLabels(["File / Mark", "Line"])
+        self.bookmarks_tree.setFont(ui_font)           # ✅ Tree content
+        self.bookmarks_tree.header().setFont(ui_font)  # ✅ Tree header        
+        self.bookmarks_tree.itemClicked.connect(self.on_bookmark_clicked)
+        self.bookmarks_tree.setRootIsDecorated(True)
+        self.bookmarks_tree.setIndentation(20)
+        
+        # ✅ Theme-aware stylesheet (replaces the hardcoded one)
+        self.refresh_theme()        
+        
+        layout.addWidget(self.bookmarks_tree)
+        
+
+        # Instructions label
+        instructions = QLabel(
+            "Click line numbers or press F11 to toggle bookmarks\n"
+            "Click bookmarks to navigate to file and line"
+        )
+        instructions.setFont(ui_font)  # ✅
+        instructions.setStyleSheet("color: #666; font-size: 10px; font-style: italic;")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+
+    def refresh_theme(self):
+        from style_manager import get_tree_widget_style, get_settings_panel_style
+        s  = get_tree_widget_style()
+        sp = get_settings_panel_style()
+
+        if hasattr(self, 'bookmarks_tree'):
+            self.bookmarks_tree.setStyleSheet(
+                _build_tree_stylesheet(s, obj_name="bookmarks_tree")  # ← ID-qualified
+            )
+            # Force Qt to re-evaluate the new sheet immediately
+            self.bookmarks_tree.style().unpolish(self.bookmarks_tree)
+            self.bookmarks_tree.style().polish(self.bookmarks_tree)
+            self.bookmarks_tree.update()
+
+        for label in self.findChildren(QLabel):
+            if "font-style: italic" in (label.styleSheet() or ""):
+                label.setStyleSheet(
+                    f"color: {sp['help_color']}; font-size: 10px; font-style: italic;"
+                )
+
+    def tr(self, key, default=None):
+        self.main_window = getattr(self, "main_window", None)
+
+        if self.main_window is None:
+            return default or key
+
+        lang = getattr(self.main_window, "menu_language", "en")
+        translations = getattr(self.main_window, "translations", {})
+
+        return translations.get(lang, {}).get(key, default or key)
+
+    def _get_ui_font(self):
+        """Get the current UI font"""
+        if hasattr(self.main_window, 'get_current_font_settings'):
+            fonts = self.main_window.get_current_font_settings()
+            family = fonts.get('ui_font_family', 'Arial')
+            size = fonts.get('toolbar_font_size', 10)
+            return QFont(family, size)
+        return QFont('Arial', 10)
+    
+    def update_font(self):
+        """Update bookmarks widget font to match interface font"""
+        if hasattr(self.main_window, 'get_current_font_settings'):
+            current_fonts = self.main_window.get_current_font_settings()
+            ui_font_family = current_fonts.get('ui_font_family', 'Arial')
+            ui_font_size = current_fonts.get('toolbar_font_size', 10)
+        else:
+            ui_font_family = getattr(self.main_window, 'ui_font_family', 'Arial')
+            ui_font_size = getattr(self.main_window, 'toolbar_font_size', 10)
+
+        ui_font = QFont(ui_font_family, ui_font_size)
+
+        # Apply to tree widget
+        if hasattr(self, 'bookmarks_tree'):
+            self.bookmarks_tree.setFont(ui_font)
+            self.bookmarks_tree.header().setFont(ui_font)
+
+        # Apply to all labels and buttons
+        for child in self.findChildren(QLabel):
+            child.setFont(ui_font)
+        for child in self.findChildren(QPushButton):
+            child.setFont(ui_font)        
+            
+    def get_current_file_path(self):
+        """Get current file path from editor manager"""
+        if hasattr(self.main_window, 'editor_manager'):
+            current_editor = self.main_window.editor_manager.get_current_editor()
+            if current_editor:
+                # Try to get file path from editor
+                if hasattr(current_editor, 'file_path') and current_editor.file_path:
+                    return current_editor.file_path
+                # Try to get from editor manager's current file tracking
+                if hasattr(self.main_window.editor_manager, 'current_file') and self.main_window.editor_manager.current_file:
+                    return self.main_window.editor_manager.current_file
+                # Try to get from editor manager's file tracking
+                if hasattr(self.main_window.editor_manager, 'get_current_file_path'):
+                    file_path = self.main_window.editor_manager.get_current_file_path()
+                    if file_path:
+                        return file_path
+        return None
+
+    def _extract_file_name(self, file_path):
+        """Extract just the filename from full path"""
+        if not file_path:
+            return "Untitled"
+        import os
+        return os.path.basename(file_path)
+        
+    
+    def add_bookmark(self, line_number, text_snippet, editor_file_path=None):
+        """Add a bookmark at the specified line for specific file"""
+        if not editor_file_path:
+            editor_file_path = self.get_current_file_path() or "Untitled"
+        
+        # Initialize file entry if it doesn't exist
+        if editor_file_path not in self.bookmarks:
+            self.bookmarks[editor_file_path] = {}
+        
+        # Check if bookmark already exists
+        if line_number in self.bookmarks[editor_file_path]:
+            return  # Bookmark already exists
+        
+        bookmark = BookmarkItem(line_number, text_snippet, editor_file_path)
+        self.bookmarks[editor_file_path][line_number] = bookmark
+        self.refresh_bookmarks_tree()
+        
+        # Update line number area color
+        self._update_editor_line_colors()
+    
+            
+    
+    def refresh_bookmarks_tree(self):
+        """Refresh the bookmarks tree widget organized by files"""
+        self.bookmarks_tree.clear()
+        
+        # Sort files alphabetically
+        sorted_files = sorted(self.bookmarks.keys())
+        
+        for file_path in sorted_files:
+            file_bookmarks = self.bookmarks[file_path]
+            if not file_bookmarks:
+                continue
+            
+            # Create file node
+            file_name = BookmarkItem._extract_file_name(None, file_path)
+            file_item = QTreeWidgetItem([file_name, f"({len(file_bookmarks)} bookmarks)"])
+            file_item.setData(0, Qt.UserRole, {'type': 'file', 'file_path': file_path})
+            
+            # Style file node
+            file_font = file_item.font(0)
+            file_font.setBold(True)
+            file_item.setFont(0, file_font)
+            file_item.setIcon(0, self._create_file_icon())
+            
+            # Add bookmark children sorted by line number
+            sorted_bookmarks = sorted(file_bookmarks.values(), key=lambda b: b.line_number)
+            
+            for bookmark in sorted_bookmarks:
+                bookmark_text = f"Line {bookmark.line_number}: {bookmark.text_snippet}"
+                bookmark_item = QTreeWidgetItem([bookmark_text, str(bookmark.line_number)])
+                bookmark_item.setData(0, Qt.UserRole, {
+                    'type': 'bookmark',
+                    'line_number': bookmark.line_number,
+                    'file_path': file_path
+                })
+                
+                # Style bookmark node
+                bookmark_item.setToolTip(0, f"File: {file_name}\nLine {bookmark.line_number}\nDouble-click to navigate")
+                bookmark_item.setIcon(0, self._create_bookmark_icon())
+                
+                file_item.addChild(bookmark_item)
+            
+            self.bookmarks_tree.addTopLevelItem(file_item)
+            file_item.setExpanded(True)  # Expand by default
+        
+        # Resize columns to content
+        self.bookmarks_tree.resizeColumnToContents(0)
+        self.bookmarks_tree.resizeColumnToContents(1)
+
+        
+    def _create_file_icon(self):
+        """Create a simple file icon"""
+        from PyQt5.QtGui import QPixmap, QPainter, QIcon
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Draw file icon
+        painter.setBrush(QColor("#2196F3"))
+        painter.setPen(QColor("#1976D2"))
+        painter.drawRect(2, 2, 10, 12)
+        painter.drawRect(4, 4, 6, 2)
+        painter.drawRect(4, 7, 6, 2)
+        painter.drawRect(4, 10, 4, 2)
+        
+        painter.end()
+        return QIcon(pixmap)
+        
+    def _create_bookmark_icon(self):
+        """Create a simple bookmark icon"""
+        from PyQt5.QtGui import QPixmap, QPainter, QIcon
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Draw bookmark icon
+        painter.setBrush(QColor("#FFC107"))
+        painter.setPen(QColor("#FF8F00"))
+        painter.drawRect(4, 2, 8, 12)
+        # Draw bookmark notch
+        points = [QPoint(8, 10), QPoint(6, 12), QPoint(10, 12)]
+        painter.drawPolygon(points)
+        
+        painter.end()
+        return QIcon(pixmap)
+
+    def remove_bookmark(self, line_number, editor_file_path=None):
+        """Remove bookmark at the specified line for specific file"""
+        if not editor_file_path:
+            editor_file_path = self.get_current_file_path() or "Untitled"
+        
+        if editor_file_path in self.bookmarks and line_number in self.bookmarks[editor_file_path]:
+            del self.bookmarks[editor_file_path][line_number]
+            
+            # Remove file entry if no bookmarks remain
+            if not self.bookmarks[editor_file_path]:
+                del self.bookmarks[editor_file_path]
+            
+            self.refresh_bookmarks_tree()
+            self._update_editor_line_colors()
+
+    def toggle_bookmark(self, line_number, text_snippet, editor_file_path=None):
+        """Toggle bookmark at the specified line for specific file"""
+        if not editor_file_path:
+            editor_file_path = self.get_current_file_path() or "Untitled"
+        
+        if (editor_file_path in self.bookmarks and 
+            line_number in self.bookmarks[editor_file_path]):
+            self.remove_bookmark(line_number, editor_file_path)
+            return False  # Bookmark was removed
+        else:
+            self.add_bookmark(line_number, text_snippet, editor_file_path)
+            return True  # Bookmark was added
+    
+    def on_bookmark_clicked(self, item, column):
+        """Handle bookmark tree item click"""
+        item_data = item.data(0, Qt.UserRole)
+        if not item_data:
+            return
+        
+        if item_data['type'] == 'bookmark':
+            line_number = item_data['line_number']
+            file_path = item_data['file_path']
+            
+            # Switch to the file first, then navigate to line
+            self.switch_to_file_and_navigate(file_path, line_number)
+        elif item_data['type'] == 'file':
+            # Toggle file node expansion
+            item.setExpanded(not item.isExpanded())
+            
+    def switch_to_file_and_navigate(self, file_path, line_number):
+        """Switch to specific file and navigate to line"""
+        if not hasattr(self.main_window, 'editor_manager'):
+            return
+        # First, try to switch to the file if it's already open
+        if hasattr(self.main_window.editor_manager, '_switch_to_existing_file'):
+            try:
+                self.main_window.editor_manager._switch_to_existing_file(file_path)
+                self.go_to_line(line_number)
+            except Exception as e:
+                print(f"Error opening file {file_path}: {e}")
+                return
+        
+        else:
+            # Fallback: just navigate to line if file is current
+            self.go_to_line(line_number)
+        
+        # Emit signal for external handling
+        self.bookmark_clicked.emit(line_number, file_path)
+    
+    def go_to_line(self, line_number):
+        """Navigate to the specified line in the current editor"""
+        if not hasattr(self.main_window, 'editor_manager'):
+            return
+        
+        current_editor = self.main_window.editor_manager.get_current_editor()
+        if not current_editor:
+            return
+        
+        # Go to the specified line
+        cursor = current_editor.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        for _ in range(line_number - 1):
+            cursor.movePosition(QTextCursor.NextBlock)
+        
+        current_editor.setTextCursor(cursor)
+        current_editor.ensureCursorVisible()
+        current_editor.setFocus()
+        
+        status_msg = self.tr("status_go_to_line").format(line=line_number)
+        if hasattr(self.main_window, 'update_status_bar'):
+            self.main_window.update_status_bar(status_msg)
+        
+            
+    def clear_all_bookmarks(self):
+        """Clear all bookmarks for all files - ENHANCED to clear ALL editor styles"""
+        # Clear bookmarks in widget
+        self.bookmarks.clear()
+        self.refresh_bookmarks_tree()
+        
+        editors_cleared = 0
+        
+        if hasattr(self.main_window, "editor_manager"):
+            # MAIN APPROACH: Access through editor_files dictionary (your structure)
+            if hasattr(self.main_window.editor_manager, 'editor_files'):
+                #print(f"Found editor_files with {len(self.main_window.editor_manager.editor_files)} entries")
+                for file_path, editor_data in self.main_window.editor_manager.editor_files.items():
+                    editor = None
+                    
+                    # Your structure uses editor_data as a dictionary with 'editor' key
+                    if isinstance(editor_data, dict) and 'editor' in editor_data:
+                        editor = editor_data['editor']
+                    elif hasattr(editor_data, 'editor'):
+                        editor = editor_data.editor
+                    elif hasattr(editor_data, '__dict__'):
+                        # Search for editor-like objects in the data
+                        for attr_name, attr_value in editor_data.__dict__.items():
+                            if hasattr(attr_value, 'bookmarked_lines') and hasattr(attr_value, 'lineNumberArea'):
+                                editor = attr_value
+                                break
+                    
+                    if editor and hasattr(editor, 'bookmarked_lines'):
+                        editor.bookmarked_lines.clear()
+                        if hasattr(editor, 'lineNumberArea'):
+                            editor.lineNumberArea.update()
+                        editors_cleared += 1
+                        #print(f"Cleared bookmarks from editor: {os.path.basename(file_path)}")
+            
+            # APPROACH 2: Access through editor_tabs (based on your structure analysis)
+            if hasattr(self.main_window.editor_manager, 'editor_tabs'):
+                editor_tabs = self.main_window.editor_manager.editor_tabs
+                
+                # Handle tabbed mode (single QTabWidget)
+                if isinstance(editor_tabs, QTabWidget):
+                    for i in range(editor_tabs.count()):
+                        widget = editor_tabs.widget(i)
+                        if widget and hasattr(widget, 'bookmarked_lines'):
+                            widget.bookmarked_lines.clear()
+                            if hasattr(widget, 'lineNumberArea'):
+                                widget.lineNumberArea.update()
+                            editors_cleared += 1
+                            #print(f"Cleared bookmarks from tab {i}")
+                
+                # Handle H/V mode (list of QTabWidgets)
+                elif isinstance(editor_tabs, list):
+                    for tab_widget_index, tab_widget in enumerate(editor_tabs):
+                        if hasattr(tab_widget, 'count'):
+                            for tab_index in range(tab_widget.count()):
+                                widget = tab_widget.widget(tab_index)
+                                if widget and hasattr(widget, 'bookmarked_lines'):
+                                    widget.bookmarked_lines.clear()
+                                    if hasattr(widget, 'lineNumberArea'):
+                                        widget.lineNumberArea.update()
+                                    editors_cleared += 1
+                                    #print(f"Cleared bookmarks from tab widget {tab_widget_index}, tab {tab_index}")
+            
+            # APPROACH 3: Clear current editor (fallback)
+            current_editor = self.main_window.editor_manager.get_current_editor()
+            if current_editor and hasattr(current_editor, 'bookmarked_lines'):
+                current_editor.bookmarked_lines.clear()
+                if hasattr(current_editor, 'lineNumberArea'):
+                    current_editor.lineNumberArea.update()
+                editors_cleared += 1
+                #print(f"Cleared bookmarks from current editor")
+            
+            # APPROACH 4: Find ALL BookmarksManager widgets via QApplication
+            from PyQt5.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                for widget in app.allWidgets():
+                    # Check for your specific BookmarksManager class
+                    if (hasattr(widget, 'bookmarked_lines') and 
+                        hasattr(widget, 'lineNumberArea') and
+                        hasattr(widget, 'textCursor') and
+                        type(widget).__name__ in ['BookmarksManager', 'AutoCompletion']):
+                        widget.bookmarked_lines.clear()
+                        widget.lineNumberArea.update()
+                        editors_cleared += 1
+                        #print(f"Cleared bookmarks from widget: {type(widget).__name__}")
+        
+        # Fallback for single editor
+        elif hasattr(self.main_window, "editor"):
+            if hasattr(self.main_window.editor, 'bookmarked_lines'):
+                self.main_window.editor.bookmarked_lines.clear()
+                if hasattr(self.main_window.editor, 'lineNumberArea'):
+                    self.main_window.editor.lineNumberArea.update()
+                editors_cleared += 1
+        
+        # Update status bar with count of editors cleared
+        status_msg = self.tr("status_editors_cleared").format(editors=editors_cleared)
+        if hasattr(self.main_window, 'update_status_bar'):
+            self.main_window.update_status_bar(status_msg)
+        
+        #print(f"Successfully cleared bookmarks from {editors_cleared} editors")
+
+
+    def save_bookmarks_to_config(self):
+        """Save bookmarks to configuration - FIXED VERSION"""
+        try:
+            if not hasattr(self.main_window, 'config_manager'):
+                print("No config_manager available for saving bookmarks")
+                return False
+            
+            # Ensure bookmarks section exists
+            if not self.main_window.config_manager.config.has_section('bookmarks'):
+                self.main_window.config_manager.config.add_section('bookmarks')
+            
+            bookmarks_data = {}
+            
+            # Convert bookmarks to serializable format
+            for file_path, file_bookmarks in self.bookmarks.items():
+                if file_bookmarks:  # Only save non-empty bookmark sets
+                    bookmarks_data[file_path] = {}
+                    for line_number, bookmark in file_bookmarks.items():
+                        bookmarks_data[file_path][str(line_number)] = {
+                            'line_number': bookmark.line_number,
+                            'text_snippet': bookmark.text_snippet,
+                            'file_path': bookmark.editor_file_path or file_path
+                        }
+            
+            # Save to config as JSON string
+            import json
+            bookmarks_json = json.dumps(bookmarks_data, indent=2, ensure_ascii=False)
+            self.main_window.config_manager.config.set('bookmarks', 'saved_bookmarks', bookmarks_json)
+            
+            # Force save the config
+            self.main_window.config_manager.save_config()
+            
+            bookmark_count = sum(len(fb) for fb in bookmarks_data.values())
+            #print(f"Successfully saved {bookmark_count} bookmarks for {len(bookmarks_data)} files")
+            return True
+            
+        except Exception as e:
+            print(f"Error saving bookmarks to config: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def load_bookmarks_from_config(self):
+        """Load bookmarks from configuration - FIXED VERSION"""
+        try:
+            if not hasattr(self.main_window, 'config_manager'):
+                #print("No config_manager available for loading bookmarks from load_bookmarks_from_config")
+                return False
+            
+            # Ensure bookmarks section exists
+            if not self.main_window.config_manager.config.has_section('bookmarks'):
+                print("No bookmarks section in config, creating empty one")
+                self.main_window.config_manager.config.add_section('bookmarks')
+                self.main_window.config_manager.save_config()
+                return True
+            
+            # Get bookmarks JSON from config
+            bookmarks_json = self.main_window.config_manager.config.get('bookmarks', 'saved_bookmarks', fallback='{}')
+            
+            if not bookmarks_json or bookmarks_json.strip() == '{}':
+                #print("No saved bookmarks found in config")
+                return True
+            
+            # Parse JSON data
+            import json
+            bookmarks_data = json.loads(bookmarks_json)
+            
+            # Clear existing bookmarks
+            self.bookmarks.clear()
+            loaded_count = 0
+            
+            # Load bookmarks from data
+            for file_path, file_bookmarks in bookmarks_data.items():
+                if file_bookmarks:
+                    self.bookmarks[file_path] = {}
+                    for line_str, bookmark_data in file_bookmarks.items():
+                        try:
+                            line_number = int(line_str)
+                            bookmark = BookmarkItem(
+                                bookmark_data['line_number'],
+                                bookmark_data['text_snippet'],
+                                bookmark_data.get('file_path', file_path)
+                            )
+                            self.bookmarks[file_path][line_number] = bookmark
+                            loaded_count += 1
+                        except (ValueError, KeyError) as e:
+                            print(f"Error loading bookmark {line_str} for {file_path}: {e}")
+            
+            # Refresh display
+            self.refresh_bookmarks_tree()
+            
+            # Update current editor's bookmarks display
+            self._update_editor_line_colors()
+            
+            #print(f"Successfully loaded {loaded_count} bookmarks for {len(self.bookmarks)} files")
+            return True
+            
+        except Exception as e:
+            print(f"Error loading bookmarks from config: {e}")
+            import traceback
+            traceback.print_exc()
+            self.bookmarks.clear()
+            return False
+
+            
+    def clear_file_bookmarks(self, file_path):
+        """Clear all bookmarks for a specific file"""
+        if file_path in self.bookmarks:
+            del self.bookmarks[file_path]
+            self.refresh_bookmarks_tree()
+            self._update_editor_line_colors()
+    
+    def has_bookmark(self, line_number, editor_file_path=None):
+        """Check if a bookmark exists at the specified line for specific file"""
+        if not editor_file_path:
+            editor_file_path = self.get_current_file_path() or "Untitled"
+        
+        return (editor_file_path in self.bookmarks and 
+                line_number in self.bookmarks[editor_file_path])
+    
+    def get_bookmarks_count(self):
+        """Get the total number of bookmarks across all files"""
+        total = 0
+        for file_bookmarks in self.bookmarks.values():
+            total += len(file_bookmarks)
+        return total
+    
+    def get_file_bookmarks_count(self, file_path):
+        """Get number of bookmarks for specific file"""
+        return len(self.bookmarks.get(file_path, {}))
+    
+    def get_current_file_bookmarks(self):
+        """Get bookmarks for currently active file"""
+        current_file = self.get_current_file_path()
+        if current_file and current_file in self.bookmarks:
+            return set(self.bookmarks[current_file].keys())
+        return set()
+    
+    def _update_editor_line_colors(self):
+        """Update editor line number colors to show bookmarks"""
+        if hasattr(self.main_window, 'editor_manager'):
+            current_editor = self.main_window.editor_manager.get_current_editor()
+            if current_editor and hasattr(current_editor, 'lineNumberArea'):
+                # Update the editor's bookmark tracking
+                if hasattr(current_editor, 'sync_bookmarks_with_widget'):
+                    current_editor.sync_bookmarks_with_widget(self)
+                current_editor.lineNumberArea.update()
