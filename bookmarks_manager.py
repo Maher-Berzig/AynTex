@@ -1698,27 +1698,76 @@ class BookmarksManager(QPlainTextEdit):
             self._processing_delimiter = False
 
     def _handle_alt_enter(self):
-            cursor = self.textCursor()
-            text_up_to_cursor = self.toPlainText()[:cursor.position()]
-            begins = list(re.finditer(r"\\begin\{([a-zA-Z0-9_*]+)\}", text_up_to_cursor))
-            ends = list(re.finditer(r"\\end\{([a-zA-Z0-9_*]+)\}", text_up_to_cursor))
-            if not begins:
-                return
-            stack = [m.group(1) for m in begins]
-            for m in ends:
-                if m.group(1) in stack[::-1]:
-                    stack.reverse()
-                    stack.remove(m.group(1))
-                    stack.reverse()
-            if not stack:
-                return
-            env_name = stack[-1]
-            end_tag = f"\\end{{{env_name}}}"
-            cursor.movePosition(QTextCursor.EndOfLine)
-            cursor.insertText(f"\n\n{end_tag}")
-            cursor.movePosition(QTextCursor.Up)
-            cursor.movePosition(QTextCursor.StartOfLine)
-            self.setTextCursor(cursor)
+        cursor = self.textCursor()
+        pos = cursor.position()
+        full_text = self.toPlainText()
+        text_up_to_cursor = full_text[:pos]
+
+        # --- find innermost unclosed \begin{...} ---
+        env_tokens = []
+        for m in re.finditer(r"\\begin\{([a-zA-Z0-9_*]+)\}", text_up_to_cursor):
+            env_tokens.append((m.start(), 'begin', m.group(1), m.end()))
+        for m in re.finditer(r"\\end\{([a-zA-Z0-9_*]+)\}", text_up_to_cursor):
+            env_tokens.append((m.start(), 'end', m.group(1), m.end()))
+        env_tokens.sort(key=lambda t: t[0])
+
+        env_stack = []  # list of (name, open_tag_end_pos)
+        for start, kind, name, end in env_tokens:
+            if kind == 'begin':
+                env_stack.append((name, end))
+            else:
+                for i in range(len(env_stack) - 1, -1, -1):
+                    if env_stack[i][0] == name:
+                        del env_stack[i]
+                        break
+
+        env_candidate = None
+        if env_stack:
+            name, open_end = env_stack[-1]
+            env_candidate = ('env', open_end, name)
+
+        # --- find innermost unclosed \[ ... \] ---
+        math_tokens = []
+        for m in re.finditer(r"\\\[", text_up_to_cursor):
+            math_tokens.append((m.start(), 'open', m.end()))
+        for m in re.finditer(r"\\\]", text_up_to_cursor):
+            math_tokens.append((m.start(), 'close', m.end()))
+        math_tokens.sort(key=lambda t: t[0])
+
+        math_stack = []
+        for start, kind, end in math_tokens:
+            if kind == 'open':
+                math_stack.append(end)
+            else:
+                if math_stack:
+                    math_stack.pop()
+
+        math_candidate = ('math', math_stack[-1], None) if math_stack else None
+
+        # --- pick whichever unclosed delimiter is innermost (closest to cursor) ---
+        candidates = [c for c in (env_candidate, math_candidate) if c is not None]
+        if not candidates:
+            return
+        kind, open_end, name = max(candidates, key=lambda c: c[1])
+
+        close_tag = f"\\end{{{name}}}" if kind == 'env' else "\\]"
+
+        body_text = full_text[open_end:pos]
+        is_empty = body_text.strip() == ""
+
+        if is_empty:
+            # fresh environment: blank line for cursor, closing tag on its own line
+            insertion = f"\n\n{close_tag}"
+            cursor.insertText(insertion)
+            cursor.setPosition(pos + 1)
+        else:
+            # content already written: close immediately, cursor right after the tag
+            insertion = f"\n{close_tag}"
+            cursor.insertText(insertion)
+            cursor.setPosition(pos + len(insertion))
+
+        self.setTextCursor(cursor)
+            
     def focusOutEvent(self, event):
         self._backslash_selection_state = None
         super().focusOutEvent(event)
