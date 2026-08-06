@@ -156,6 +156,20 @@ class CompilationManager(QObject):
             import traceback
             traceback.print_exc()    
             
+    def _compiler_declares_no_pdf(self, combined_text):
+        """Check whether the compiler itself explicitly said no PDF came
+        out of this run (e.g. a fatal error). This takes priority over a
+        plain os.path.exists() check on the expected PDF path, because a
+        PDF from a *previous successful* compile can still be sitting on
+        disk even though this run failed to produce a fresh one."""
+        text_lower = combined_text.lower()
+        no_pdf_indicators = [
+            'no output pdf file produced',
+            'fatal error occurred',
+            'emergency stop',
+        ]
+        return any(indicator in text_lower for indicator in no_pdf_indicators)
+
     def has_compilation_errors(self, output, errors):
         """Check if compilation output contains errors"""
         error_indicators = [
@@ -845,6 +859,14 @@ class CompilationManager(QObject):
         if hasattr(self, '_last_compiled_pdf_path') and self._last_compiled_pdf_path:
             pdf_created = os.path.exists(self._last_compiled_pdf_path)
             #print(f"PDF existence check: {self._last_compiled_pdf_path} -> {pdf_created}")
+
+        # A PDF file existing on disk doesn't mean THIS run produced it -
+        # it could be left over from a previous successful compile. Trust
+        # the compiler's own "no output PDF" statement over the file check.
+        if pdf_created and self._compiler_declares_no_pdf(
+            self.compilation_output + "\n" + self.compilation_errors
+        ):
+            pdf_created = False
         
         # Call original finished handler with proper arguments
         # But override the result based on PDF creation
@@ -1224,6 +1246,13 @@ class CompilationManager(QObject):
                 
                 #print(f"DEBUG: Expected PDF not found: {getattr(self, '_last_compiled_pdf_path', 'None')}")
 
+        # Same stale-PDF guard as on_latex_process_finished_with_cleanup:
+        # an existing file on disk doesn't mean THIS run produced it.
+        if pdf_created and self._compiler_declares_no_pdf(
+            self.compilation_output + "\n" + self.compilation_errors
+        ):
+            pdf_created = False
+
         # Only jump the cursor to the error line when the PDF truly wasn't
         # produced - if a PDF did come out (e.g. LaTeX recovered in
         # nonstopmode despite warnings/errors), leave the user's cursor
@@ -1434,7 +1463,7 @@ class CompilationManager(QObject):
             if error_line and hasattr(self.main_window, 'editor_manager'):
                 success = self.main_window.editor_manager.go_to_line_number(error_line)
                 if success:
-                    print(f"Jumped to error line: {error_line}")
+                    #print(f"Jumped to error line: {error_line}")
                     self.main_window.update_status_bar(f"Error at line {error_line}")
                 return success
         except Exception as e:
