@@ -1001,7 +1001,7 @@ class LayoutManager:
         """Create the terminal widget instance"""
         if self.terminal_widget is None:
             # Import here to avoid circular imports
-            from terminal_widget import AIWidgetLite
+            from terminal_widget import TerminalWidget
             self.terminal_widget = TerminalWidget(self.main_window)
             
             # Set initial directory to current file if available
