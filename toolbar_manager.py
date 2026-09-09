@@ -165,22 +165,36 @@ class ToolbarManager:
             if widget:
                 widget.setFont(font)
         
+    def _hide_side_panel_from_toolbar(self):
+        """Hide side panel and sync the menu checkbox."""
+        self.main_window.set_side_panel_visible(False)
+        mm = getattr(self.main_window, 'menu_manager', None)
+        if mm:
+            act = getattr(mm, 'toggle_visibility_action', None)
+            if act is not None:
+                act.blockSignals(True)
+                act.setChecked(False)
+                act.blockSignals(False)
+            
     def show_toolbar_context_menu(self, position):
         """Show context menu for toolbar"""
         menu = QMenu(self.main_window)
-        
+
         # Hide toolbar action
         hide_action = QAction("Hide Toolbar (F10)", self.main_window)
         hide_action.triggered.connect(lambda: self.main_window.menu_manager.toggle_main_toolbar())
         menu.addAction(hide_action)
-        
-        # Customize toolbar action (optional)
-        # customize_action = QAction("Customize Toolbar...", self.main_window)
-        # customize_action.triggered.connect(self.customize_toolbar)
-        # menu.addAction(customize_action)
-        
+
+        # Side panel action with dynamic text
+        is_visible = self.main_window.menu_manager.toggle_visibility_action.isChecked()
+        text = "Hide Side Panel (F9)" if is_visible else "Show Side Panel (F9)"
+        hide_panel_action = QAction(text, self.main_window)
+        hide_panel_action.triggered.connect(
+            lambda: self.main_window.menu_manager.toggle_visibility_action.trigger()
+        )
+        menu.addAction(hide_panel_action)
         # Show menu at cursor position
-        menu.exec_(self.main_toolbar.mapToGlobal(position))
+        menu.exec_(self.main_toolbar.mapToGlobal(position))        
     
     def _create_file_actions(self):
         """Create file-related toolbar actions"""
@@ -445,43 +459,37 @@ class ToolbarManager:
                     self.icons_manager.apply_icon_to_action_rotated(self.backmatter_action, "backmatter_compile", self._get_icon_angle())
 
     def handle_compile_action(self):
-        """Handle the unified compile/stop button click"""
-        
         import time
-        current_time = time.time() * 1000  # Convert to milliseconds
-        
-        # ✅ Debounce check - ignore rapid clicks
+        current_time = time.time() * 1000
         if self._is_debounced(self._last_compile_click_time):
-            #print("⚠️ Ignoring rapid compile button click")
             return
-            
-        self._last_compile_click_time = current_time  
-            
-        lang = self.main_window.menu_language 
-        tr = self.main_window.translations[lang]                                        
+        self._last_compile_click_time = current_time
+
+        lang = self.main_window.menu_language
+        tr = self.main_window.translations[lang]
         current_editor = self.main_window.editor_manager.get_current_editor()
         current_file = self.main_window.editor_manager.get_current_file_path()
-        
+
         if not current_editor or not current_file:
             self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
             return
 
+        cm = self.main_window.compilation_manager
+        actually_compiling = cm.is_compiling()   # ✅ real QProcess state, not a stale bool
+
         try:
-            if self._compiling:
-                # Currently compiling, so stop
-                self.main_window.compilation_manager.stop_compilation()
+            if actually_compiling:
+                cm.stop_compilation()
                 self._compiling = False
                 self.update_compile_button_text()
             else:
-                # Not compiling, so start
                 self._compiling = True
                 self.update_compile_button_text()
-                self.main_window.compilation_manager.compile_latex()
+                cm.compile_latex()
         except Exception as e:
             print(f"Error in handle_compile_action: {e}")
             import traceback
             traceback.print_exc()
-            # Reset state on error
             self._compiling = False
             self.update_compile_button_text()
 
@@ -669,7 +677,6 @@ class ToolbarManager:
         lang = self.main_window.menu_language
         tr = self.main_window.translations[lang]
         
-           
         commands_action = QAction(tr["commands_text"], self.main_window)
         commands_action.setToolTip(tr["tooltip_commands"])
         commands_action.setCheckable(True)
@@ -1952,6 +1959,10 @@ class DocumentTreeWidget(QTreeWidget):
         self.itemExpanded.connect(self._on_item_expanded)
         self.itemCollapsed.connect(self._on_item_collapsed)
 
+        # ✅ Context menu with "Copy Tree" action
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_tree_context_menu)
+
 
     def refresh_theme(self):
         from style_manager import get_tree_widget_style
@@ -2135,6 +2146,68 @@ class DocumentTreeWidget(QTreeWidget):
             self.parse_latex_structure(content)
         except Exception as e:
             self._add_placeholder_item(f"Error parsing document: {str(e)}", 0)
+
+    def _show_tree_context_menu(self, position):
+        """Show right-click menu for the document tree"""
+        menu = QMenu(self)
+
+        copy_tree_action = menu.addAction("Copy Tree")
+        copy_tree_action.setEnabled(self._has_real_structure())
+        copy_tree_action.triggered.connect(self.copy_tree_to_clipboard)
+
+        item = self.itemAt(position)
+        if item is not None and item.data(0, Qt.UserRole) is not None:
+            menu.addSeparator()
+            copy_title_action = menu.addAction("Copy Entry")
+            copy_title_action.triggered.connect(lambda: self._copy_single_item(item))
+
+        menu.exec_(self.mapToGlobal(position))
+
+    def _has_real_structure(self):
+        """Return True if the tree currently shows actual document structure
+        (as opposed to a placeholder message like 'No document open')."""
+        if self.topLevelItemCount() == 0:
+            return False
+        if self.topLevelItemCount() == 1:
+            only_item = self.topLevelItem(0)
+            if only_item.childCount() == 0 and only_item.data(0, Qt.UserRole) is None:
+                return False
+        return True
+
+    def _copy_single_item(self, item):
+        """Copy a single entry's title (without the tree's manual indent hack)"""
+        QApplication.clipboard().setText(item.text(0).strip())
+
+    def _build_tree_lines(self, item, number_prefix, depth, lines):
+        """Recursively build numbered, indented text lines for one item and its children"""
+        title = item.text(0).strip()
+        indent = "    " * depth
+        number_str = ".".join(str(n) for n in number_prefix)
+        lines.append(f"{indent}{number_str}  {title}")
+
+        for i in range(item.childCount()):
+            child = item.child(i)
+            self._build_tree_lines(child, number_prefix + [i + 1], depth + 1, lines)
+
+    def get_tree_as_text(self):
+        """Serialize the whole tree to plain text with correct numbering and indentation,
+        based on the tree's actual (visual) hierarchy rather than the raw LaTeX levels."""
+        if not self._has_real_structure():
+            # Nothing but a placeholder message ("No document open", etc.)
+            return self.topLevelItem(0).text(0).strip() if self.topLevelItemCount() else ""
+
+        lines = []
+        for i in range(self.topLevelItemCount()):
+            top_item = self.topLevelItem(i)
+            self._build_tree_lines(top_item, [i + 1], 0, lines)
+        return "\n".join(lines)
+
+    def copy_tree_to_clipboard(self):
+        """Copy the entire tree (numbering + indentation) to the system clipboard"""
+        text = self.get_tree_as_text()
+        if text:
+            QApplication.clipboard().setText(text)
+
 ###################            
     def _on_item_clicked(self, item, column):
         """Handle single click - navigate on Line column, expand/collapse on Structure column"""
