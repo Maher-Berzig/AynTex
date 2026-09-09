@@ -612,6 +612,9 @@ class CompilationManager(QObject):
                            "Please open it first, or clear the master document setting."
                            ).format(file=master_file)
                 )
+                self._compilation_in_progress = False
+                if hasattr(self.main_window, 'toolbar_manager'):
+                    self.main_window.toolbar_manager.update_compile_actions(compiling=False)
                 return
             current_file   = master_file
             current_editor = em.editor_files[master_file].get('editor')
