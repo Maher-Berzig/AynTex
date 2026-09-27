@@ -11,6 +11,20 @@ from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtWidgets import QStyle
 from PyQt5.QtSvg import QSvgRenderer
 
+import sys
+
+def get_app_base_dir():
+    """Folder that contains the .exe (frozen) or this .py (script)."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+def get_bundle_dir():
+    """PyInstaller onefile extraction dir (sys._MEIPASS), or None."""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
+    return None
+
 #symbol_colors = ["#1976d2", "#f57c00", "#7b1fa2", "#388e3c", "#d32f2f"]
 #command_colors = ["#7b1fa2", "#388e3c", "#d32f2f", "#f57c00", "#1976d2"]
 class IconsManager:
@@ -23,15 +37,41 @@ class IconsManager:
     """
     
     def __init__(self, icons_folder="icons"):
-        self.icons_folder = icons_folder
+        base_dir   = get_app_base_dir()
+        bundle_dir = get_bundle_dir()
+
+        # Absolute icons folder next to the exe / script — never CWD-relative.
+        if os.path.isabs(icons_folder):
+            self.icons_folder = icons_folder
+        else:
+            self.icons_folder = os.path.join(base_dir, icons_folder)
+            
         self.icon_cache = {}
-        self.icon_directories = [
-            icons_folder,
-            "icons",
-            "assets/icons",
-            "resources/icons",
-            os.path.join(os.path.dirname(__file__), "icons")
+        
+        # Absolute search list, in priority order.
+        candidates = []
+        if bundle_dir:                              # PyInstaller onefile
+            candidates += [
+                os.path.join(bundle_dir, "icons"),
+                os.path.join(bundle_dir, "assets", "icons"),
+                os.path.join(bundle_dir, "resources", "icons"),
+                os.path.join(bundle_dir, "_internal", "icons"),
+            ]
+        candidates += [                             # next to the exe / script
+            self.icons_folder,
+            os.path.join(base_dir, "icons"),
+            os.path.join(base_dir, "_internal", "icons"),
+            os.path.join(base_dir, "assets", "icons"),
+            os.path.join(base_dir, "resources", "icons"),
         ]
+
+        seen, dirs = set(), []
+        for d in candidates:
+            nd = os.path.normpath(os.path.abspath(d))
+            if nd not in seen:
+                seen.add(nd)
+                dirs.append(nd)
+        self.icon_directories = dirs
         
         # UI icon mapping (unchanged from original)
         self.icon_map = {
@@ -119,9 +159,12 @@ class IconsManager:
         self.symbol_icons = {}
         self.command_icons = {}
         
-        # Ensure icons folder exists
-        if not os.path.exists(self.icons_folder):
-            os.makedirs(self.icons_folder)
+        # Best-effort only. Never fatal.
+        try:
+            if not os.path.isdir(self.icons_folder):
+                os.makedirs(self.icons_folder, exist_ok=True)
+        except OSError as e:
+            print(f"IconsManager: could not create '{self.icons_folder}': {e}")
         
         # Load all symbol and command mappings
         self._initialize_symbol_mappings()
@@ -1121,13 +1164,12 @@ class IconsManager:
             self.icon_directories.insert(0, directory)
     
     def validate_icon_directories(self):
-        """Validate and create icon directories if needed"""
         for directory in self.icon_directories:
-            if not os.path.exists(directory):
+            if not os.path.isdir(directory):
                 try:
                     os.makedirs(directory, exist_ok=True)
                 except OSError as e:
-                    print(f"Could not create icon directory {directory}: {e}")
+                    print(f"IconsManager: cannot create '{directory}': {e}")
     
     def create_colored_icon(self, base_icon_name, color, size=16):
         """Create a colored variant of an existing icon"""
