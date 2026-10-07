@@ -23,6 +23,8 @@ class EditorManager:
         self.editor_layout_mode = "tabbed"  # tabbed, horizontal, vertical
         self.current_sizes = {"editor": []}
         self._loading_file = False
+        self._ui_ready = False
+        self._pending_startup_files = []        
 
         # UI components (will be set by layout manager)
         self.editor_layout_mode = "tabbed"
@@ -63,6 +65,17 @@ class EditorManager:
             self.editor_tabs.setTabsClosable(True)
             self.editor_tabs.tabCloseRequested.connect(self.close_editor_tab)
             self.editor_tabs.setMinimumSize(300, 200)
+
+    def mark_ui_ready(self):
+        """Called by LayoutManager once the editor container is attached to the window."""
+        self._ui_ready = True
+        # Flush anything queued while we were still booting.
+        for path in self._pending_startup_files:
+            try:
+                self.open_specific_file(path)
+            except Exception as e:
+                print(f"⚠️ Deferred open failed for {path}: {e}")
+        self._pending_startup_files.clear()
 
 ###
     def _get_relative_path(self, target_path, base_path):
@@ -1763,29 +1776,28 @@ class EditorManager:
             QMessageBox.critical(self.main_window, "Error", f"Could not open file: {str(e)}")
 
 
-    def open_specific_file(self, path):
-        """Open a specific file - with consistent path handling and proper tracking"""
-        from PyQt5.QtWidgets import QApplication
-        from PyQt5.QtCore import Qt
 
+    def open_specific_file(self, path):
         if not path:
             return
 
-        # Show wait cursor immediately
+        # If the editor container hasn't been attached to the window yet,
+        # queue the request.  LayoutManager will call mark_ui_ready() once
+        # the container exists and the queue will be flushed then.
+        if not self._ui_ready:
+            self._pending_startup_files.append(path)
+            return
+
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import Qt
+
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
-
         try:
-            # Use consistent path normalization
             path = self.normalize_path(path)
-            
-            # Store the directory for future new files
             self.last_opened_directory = os.path.dirname(path)
-            
-            # Ensure editor_tabs is initialized
             self._ensure_editor_tabs_initialized()
-            
-            # Check if already open
+
             existing_path = self._find_open_file(path)
             if existing_path:
                 if self._switch_to_existing_file(existing_path):
@@ -1794,16 +1806,13 @@ class EditorManager:
                     self._add_to_recent_files(path)
                     self._add_to_session_files(path)
                     return
-            
-            # Open new file
+
             self._open_new_file(path)
-            
+
             if self.editor_layout_mode != "tabbed" and path in self.editor_files:
                 self._active_tab_widget_index = self.editor_files[path].get('tab_widget_index', 0)
         finally:
-            # Always restore cursor, even if an error occurs
-            QApplication.restoreOverrideCursor()        
-
+            QApplication.restoreOverrideCursor()
         
     def _ensure_editor_tabs_initialized(self):
         """Ensure editor_tabs is properly initialized based on layout mode"""
