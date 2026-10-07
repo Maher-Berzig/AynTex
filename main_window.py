@@ -675,8 +675,8 @@ class MainWindow(QMainWindow):
         """Complete initialization after UI is stable"""
         try:
             # Setup manager UIs (creates editor_tabs, pdf_tabs)
-            self.editor_manager.setup_ui()
-            self.pdf_manager.setup_ui()   
+            #self.editor_manager.setup_ui()
+            #self.pdf_manager.setup_ui()   
           
             # Auto-open last file
             self.auto_open_last_file()
@@ -733,6 +733,11 @@ class MainWindow(QMainWindow):
      
         # Add main splitter to layout
         self.main_layout.addWidget(self.main_splitter)
+
+        # The editor container is now attached to the window and any
+        # startup file that arrived via the command line can be flushed.
+        if hasattr(self, 'editor_manager'):
+            self.editor_manager.mark_ui_ready()
         
         # In setup_ui, replace the entire status bar block with:
         self.status_bar = self.statusBar()
