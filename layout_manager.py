@@ -1024,6 +1024,7 @@ class LayoutManager:
                 widget = self.editor_vertical_splitter.widget(i)
                 if widget != preserved_output:  # Keep output
                     widget.setParent(None)  # Proper removal
+                    widget.deleteLater()
             self.editor_vertical_splitter = None
 
         # Create editor_container with proper parent
@@ -1646,6 +1647,22 @@ class LayoutManager:
         """Recreate editor container with new layout mode - FIXED path/basename issues"""
         if self._recreating:
             return
+            
+            
+        # --- NEW GUARD ---
+        # If we're still inside MainWindow.__init__, and files are already
+        # open, do NOT rebuild the container.  Rebuilding at this point
+        # reparents widgets into a splitter that hasn't been attached to the
+        # window yet, and a subsequent setup_layout() / welcome rebuild will
+        # orphan them.
+        mw = self.main_window
+        if getattr(mw, 'initializing', False):
+            em = getattr(mw, 'editor_manager', None)
+            if em and getattr(em, 'editor_files', None):
+                return
+        # --- END GUARD ---
+            
+            
         self._recreating = True
         
         try:
