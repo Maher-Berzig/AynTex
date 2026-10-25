@@ -81,13 +81,24 @@ class ToolbarManager:
         )
 
 
+    @staticmethod
+    def _now_ms():
+        """Monotonic time in ms.
+
+        time.time() is the wall clock: NTP / Windows-time sync, sleep-resume or
+        a manual change can move it BACKWARDS.  The old debounce then computed
+        a negative elapsed time (< 500 ms) and silently swallowed every click
+        on the toolbar button until the clock caught up - without saving or
+        compiling - while F5 (which has no debounce) kept working.
+        """
+        import time
+        return time.monotonic() * 1000.0
+
     def _is_debounced(self, last_click_time):
         """Check if click should be ignored due to debouncing"""
-        import time
-        current_time = time.time() * 1000  # Convert to milliseconds
-        if current_time - last_click_time < self._click_debounce_ms:
-            return True
-        return False
+        elapsed = self._now_ms() - last_click_time
+        # Only a small, non-negative elapsed time counts as a double-click.
+        return 0 <= elapsed < self._click_debounce_ms
        
        
     def create_main_toolbar(self):
@@ -458,40 +469,50 @@ class ToolbarManager:
                     #self.icons_manager.apply_icon_to_action(self.backmatter_action, "backmatter_compile")
                     self.icons_manager.apply_icon_to_action_rotated(self.backmatter_action, "backmatter_compile", self._get_icon_angle())
 
-    def handle_compile_action(self):
-        import time
-        current_time = time.time() * 1000
-        if self._is_debounced(self._last_compile_click_time):
-            return
-        self._last_compile_click_time = current_time
+    def handle_compile_action(self, *_args):
+        """Toolbar compile/stop button.
 
-        lang = self.main_window.menu_language
-        tr = self.main_window.translations[lang]
-        current_editor = self.main_window.editor_manager.get_current_editor()
-        current_file = self.main_window.editor_manager.get_current_file_path()
-
-        if not current_editor or not current_file:
-            self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
-            return
-
-        cm = self.main_window.compilation_manager
-        actually_compiling = cm.is_compiling()   # ✅ real QProcess state, not a stale bool
-
+        Behaves exactly like F5 (save + compile, or stop if running).  The whole
+        body is inside try/except so that no exception can make the button a
+        silent no-op, and a click is never dropped without a log line.
+        """
         try:
-            if actually_compiling:
+            now = self._now_ms()
+            if self._is_debounced(self._last_compile_click_time):
+                print(f"[compile button] click ignored (double-click guard, "
+                      f"{now - self._last_compile_click_time:.0f} ms since last click)")
+                return
+            self._last_compile_click_time = now
+
+            lang = self.main_window.menu_language
+            tr = self.main_window.translations[lang]
+            em = self.main_window.editor_manager
+            cm = self.main_window.compilation_manager
+
+            if cm.is_compiling():              # real QProcess state
                 cm.stop_compilation()
                 self._compiling = False
                 self.update_compile_button_text()
-            else:
-                self._compiling = True
-                self.update_compile_button_text()
-                cm.compile_latex()
+                return
+
+            # Same entry point as F5.  compile_latex() resolves the target file
+            # itself (master document or current tab) and saves it first.
+            if not em.get_current_editor() or not em.get_current_file_path():
+                self.show_error(tr["no_file_open"], tr["open_a_latex_file"])
+                return
+
+            self._compiling = True
+            self.update_compile_button_text()
+            cm.compile_latex(self.main_window.latex_engine)
         except Exception as e:
             print(f"Error in handle_compile_action: {e}")
             import traceback
             traceback.print_exc()
             self._compiling = False
-            self.update_compile_button_text()
+            try:
+                self.update_compile_button_text()
+            except Exception:
+                pass
 
     def on_compilation_started(self):
         """Called when compilation starts"""
@@ -512,8 +533,7 @@ class ToolbarManager:
     def handle_backmatter_action(self):
         """Handle the unified compile/stop button click"""
         
-        import time
-        current_time = time.time() * 1000  # Convert to milliseconds
+        current_time = self._now_ms()
         
         # ✅ Debounce check - ignore rapid clicks
         if self._is_debounced(self._last_backmatter_click_time):
