@@ -5,7 +5,7 @@ Replaces default Qt context menu with custom LaTeX-aware menu
 """
 
 from PyQt5.QtWidgets import (QMenu, QAction, QApplication)
-from PyQt5.QtGui import QTextCursor
+from PyQt5.QtGui import QTextCursor, QKeySequence
 from PyQt5.QtCore import Qt
 import os
 
@@ -132,7 +132,8 @@ class ContextMenuManager:
         menu.addSeparator()
 
         select_all_action = QAction("Select All", menu)
-        select_all_action.setShortcut("Ctrl+A")
+        #select_all_action.setShortcut("Ctrl+A")
+        select_all_action.setShortcuts(QKeySequence.SelectAll)
         select_all_action.triggered.connect(editor.selectAll)
         self._apply_icon(select_all_action, "select_all")
         menu.addAction(select_all_action)

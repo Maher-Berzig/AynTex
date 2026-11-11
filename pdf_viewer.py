@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QRect, QProcess, QTimer,  QPoint, QEvent, QSize, QObject
 from PyQt5.QtGui import (
-    QIcon, QPixmap, QPainter, QPen, QCursor, QTextCursor, QColor, QBrush, QPixmap, QPainterPath
+    QIcon, QPixmap, QPainter, QPen, QCursor, QTextCursor, QColor, QBrush, QPixmap, QPainterPath, QImage
 )    
 try:
     from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
@@ -26,6 +26,67 @@ except ImportError:
 import fitz
 
 from icons_manager import IconsManager
+
+
+def fitz_pixmap_to_qpixmap(pix):
+    """Convert a fitz (PyMuPDF) Pixmap to a QPixmap without going through
+    Qt's PPM image-format decoder.
+
+    The previous approach (pix.tobytes("ppm") -> QPixmap.loadFromData())
+    depends on Qt being able to find/parse a PPM image plugin at runtime.
+    On some packaged Windows builds that plugin is missing or fails
+    silently, so loadFromData() returns False, its result was never
+    checked, and the page was left with a null (blank) pixmap - which then
+    shows up as an empty pane in the app's background color, and stays
+    that way on every refresh since the failure is deterministic on that
+    machine.
+
+    Building the QImage directly from the pixmap's raw sample bytes avoids
+    that dependency entirely, so rendering can't fail for that reason.
+    Returns None if the pixmap has unexpected dimensions (e.g. zero-size,
+    which can happen if a caller ever computes a degenerate zoom factor).
+    """
+    if pix is None or pix.width <= 0 or pix.height <= 0:
+        return None
+
+    # fitz's default get_pixmap() output is 8-bit RGB (3 bytes/pixel) with
+    # no alpha unless alpha=True was explicitly requested. Only trust the
+    # two well-defined cases directly; anything else (grayscale, CMYK,
+    # gray+alpha, etc.) gets normalized to plain RGB first so the format/
+    # stride we tell QImage about always matches the real byte layout -
+    # a mismatch there doesn't necessarily crash, it can just quietly
+    # misread the buffer (wrong colors, or an oversized/undersized read).
+    if pix.n == 3 and not pix.alpha:
+        img_format = QImage.Format_RGB888
+    elif pix.n == 4 and pix.alpha:
+        img_format = QImage.Format_RGBA8888
+    else:
+        pix = fitz.Pixmap(fitz.csRGB, pix)  # normalizes to n=3, no alpha
+        img_format = QImage.Format_RGB888
+
+    img = QImage(pix.samples, pix.width, pix.height, pix.stride, img_format)
+    if img.isNull():
+        # Surface the actual numbers Qt choked on instead of leaving this
+        # a mystery - a normal page at zoom=1 should be a few MB at most,
+        # so if this fires for an ordinary-sized page, it usually means
+        # the process's memory/address space is already close to its
+        # ceiling (very plausible on 32-bit Windows) rather than this one
+        # page being unreasonably large.
+        approx_mb = (pix.stride * pix.height) / (1024 * 1024)
+        print(f"❌ QImage allocation failed for a {pix.width}x{pix.height} "
+              f"page (n={pix.n}, alpha={pix.alpha}, stride={pix.stride}, "
+              f"~{approx_mb:.1f} MB needed).")
+        return None
+    # NOTE: no extra .copy() here. pix.samples already hands back a
+    # standalone `bytes` object (PyMuPDF copies the pixel data out of the
+    # Pixmap when you access .samples), and PyQt keeps a reference to that
+    # bytes object alive for as long as the QImage needs it. Copying it
+    # again just doubled the peak memory needed for every page - harmless
+    # on a machine with plenty of RAM, but enough to exhaust a 32-bit
+    # process's address space ("QImage: out of memory") on a document
+    # with several pages, or pages rendered at a higher zoom.
+    return QPixmap.fromImage(img)
+
 
 class MultiLineTextDialog(QDialog):
     """Dialog for editing multi-line annotation text"""
@@ -188,6 +249,8 @@ class PDFViewer(QWidget):
     """Custom PDF viewer with scrolling, zoom, navigation, text selection, and SyncTeX reverse search"""
     def __init__(self, main_window=None):
         super().__init__()
+        # Must exist BEFORE setup_ui() (the toolbar reads it while being built)
+        self.select_kind = "text"  # what a selected area produces: "text" or "image"
         self.main_window = main_window
         self.pdf_document = None
         self.current_pdf_path = None  # Track loaded PDF path
@@ -426,7 +489,21 @@ class PDFViewer(QWidget):
         self.select_mode_btn.setFixedSize(BUTTON_HEIGHT, BUTTON_HEIGHT)
         self.select_mode_btn.setCheckable(True)
         self.select_mode_btn.clicked.connect(self.toggle_select_mode)
+        # Right-click on the button opens the same Text / Image chooser
+        self.select_mode_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.select_mode_btn.customContextMenuRequested.connect(
+            lambda _pos: self._show_select_kind_menu())
         main_toolbar_layout.addWidget(self.select_mode_btn)
+
+        # Small drop-down arrow: choose between Text and Image selection
+        self.select_kind_btn = QToolButton()
+        self.select_kind_btn.setArrowType(Qt.DownArrow)
+        self.select_kind_btn.setToolTip("Choose selection type: Text or Image")
+        self.select_kind_btn.setFixedSize(13, BUTTON_HEIGHT)
+        self.select_kind_btn.setFocusPolicy(Qt.NoFocus)
+        self.select_kind_btn.clicked.connect(self._show_select_kind_menu)
+        main_toolbar_layout.addWidget(self.select_kind_btn)
+        self._apply_select_kind_ui()
         
         # ✅ UPDATED: Three fit buttons
         # Fit Page Width button
@@ -1016,6 +1093,8 @@ class PDFViewer(QWidget):
         """
 
         self.setStyleSheet(style)
+        if hasattr(self, 'select_mode_btn'):
+            self._apply_select_kind_ui()     # image icon colour follows the theme
 
 
     def _scroll_to_page_label(self, page_index):
@@ -1185,7 +1264,7 @@ class PDFViewer(QWidget):
         # Restore normal cursor on all page labels
         for label in self.page_labels:
             if self.select_mode:
-                label.setCursor(Qt.IBeamCursor)
+                label.setCursor(self._select_cursor())
             elif self.pan_mode:
                 label.setCursor(Qt.OpenHandCursor)
             else:
@@ -2696,7 +2775,7 @@ class PDFViewer(QWidget):
         page_index = page - 1
         
         if 0 <= page_index < self.total_pages:
-            print(f"📑 Navigating to TOC entry: {title} (page {page})")
+            #print(f"📑 Navigating to TOC entry: {title} (page {page})")
             
             # Add to navigation history before jumping
             if not self.is_navigating_history:
@@ -3859,6 +3938,105 @@ class PDFViewer(QWidget):
                                 # break    
 
 
+    # ── Selection kind: Text / Image ─────────────────────────────────────────
+    def _select_cursor(self):
+        """Cursor used while select mode is active (I-beam for text, cross for image)."""
+        return Qt.CrossCursor if getattr(self, "select_kind", "text") == "image" else Qt.IBeamCursor
+
+    def _make_image_select_icon(self):
+        """Icon for Image Selection Mode.  A custom 'select_image' icon file in the
+        icons folder wins; otherwise a simple 'picture' glyph is drawn."""
+        try:
+            path = self.main_window.icons_manager.get_icon_path("select_image")
+            if path:
+                return QIcon(path)
+        except Exception:
+            pass
+        try:
+            from style_manager import get_annotation_style
+            color = QColor(get_annotation_style()['label_color'])
+        except Exception:
+            color = self.palette().buttonText().color()
+        size = 64
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        try:
+            p.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(color, 4)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(8, 12, 48, 40, 5, 5)                # frame
+            p.setBrush(QBrush(color))
+            p.drawEllipse(40, 19, 9, 9)                           # sun
+            path = QPainterPath()                                  # mountains
+            path.moveTo(11, 49)
+            path.lineTo(26, 30)
+            path.lineTo(36, 42)
+            path.lineTo(42, 36)
+            path.lineTo(53, 49)
+            path.closeSubpath()
+            p.drawPath(path)
+        finally:
+            p.end()
+        return QIcon(pm)
+
+    def _apply_select_kind_ui(self):
+        """Refresh icon / tooltip of the selection button for the current kind."""
+        btn = getattr(self, "select_mode_btn", None)
+        if btn is None:
+            return
+        if getattr(self, "select_kind", "text") == "image":
+            btn.setIcon(self._make_image_select_icon())
+            btn.setToolTip("Image Selection Mode (drag an area to copy it as an image)\n"
+                           "Click \u25BE or right-click to switch to Text Selection")
+        else:
+            self.main_window.icons_manager.apply_icon_to_button(btn, "select_text")
+            btn.setToolTip("Text Selection Mode (drag an area to copy its text)\n"
+                           "Click \u25BE or right-click to switch to Image Selection")
+
+    def _show_select_kind_menu(self):
+        """Pop up the Text / Image chooser under the selection button."""
+        from PyQt5.QtWidgets import QActionGroup
+        menu = QMenu(self)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+
+        text_act = menu.addAction("Text Selection Mode")
+        text_act.setCheckable(True)
+        text_act.setChecked(self.select_kind == "text")
+        try:
+            self.main_window.icons_manager.get_icon_path("select_text")
+            ic = self.main_window.icons_manager.load_icon("select_text")
+            if ic and not ic.isNull():
+                text_act.setIcon(ic)
+        except Exception:
+            pass
+        image_act = menu.addAction("Image Selection Mode")
+        image_act.setCheckable(True)
+        image_act.setChecked(self.select_kind == "image")
+        image_act.setIcon(self._make_image_select_icon())
+        group.addAction(text_act)
+        group.addAction(image_act)
+
+        anchor = self.select_mode_btn
+        chosen = menu.exec_(anchor.mapToGlobal(QPoint(0, anchor.height())))
+        if chosen is text_act:
+            self.set_select_kind("text")
+        elif chosen is image_act:
+            self.set_select_kind("image")
+
+    def set_select_kind(self, kind, activate=True):
+        """Switch between "text" and "image" selection (and enter select mode)."""
+        if kind not in ("text", "image"):
+            return
+        self.select_kind = kind
+        self._apply_select_kind_ui()
+        if activate and not self.select_mode_btn.isChecked():
+            self.select_mode_btn.setChecked(True)
+        self.toggle_select_mode()          # re-syncs mode flags, cursors and status text
+
     def toggle_select_mode(self):
         """Toggle between Pan mode and Select mode"""
         self.select_mode = self.select_mode_btn.isChecked()
@@ -3875,9 +4053,12 @@ class PDFViewer(QWidget):
         if self.select_mode:
             # Select mode active
             self.select_mode_btn.setStyleSheet("background-color: #2196F3;")  # Blue highlight
-            self.content_widget.setCursor(Qt.IBeamCursor)  # Text cursor
+            self.content_widget.setCursor(self._select_cursor())
             if hasattr(self.main_window, 'statusBar'):
-                self.main_window.statusBar().showMessage("Select Mode: Click and drag to select text", 2000)
+                self.main_window.statusBar().showMessage(
+                    "Image Selection Mode: Drag to select an area - it is copied as an image"
+                    if self.select_kind == "image" else
+                    "Select Mode: Click and drag to select text", 2000)
         else:
             # Pan mode active (default)
             self.select_mode_btn.setStyleSheet("")
@@ -3888,7 +4069,7 @@ class PDFViewer(QWidget):
         # Update cursor on all page labels
         for label in self.page_labels:
             if self.select_mode:
-                label.setCursor(Qt.IBeamCursor)
+                label.setCursor(self._select_cursor())
             else:
                 label.setCursor(Qt.OpenHandCursor)
             
@@ -4245,7 +4426,7 @@ class PDFViewer(QWidget):
                     "Reverse Search Mode: Click on PDF to jump to source", 3000
                 )
         elif self.select_mode:
-            cursor = Qt.IBeamCursor  # Text selection cursor
+            cursor = self._select_cursor()  # Text/Image selection cursor
             if hasattr(self, 'synctex_btn'):
                 self.synctex_btn.setStyleSheet("")
         elif self.pan_mode:
@@ -4333,8 +4514,23 @@ class PDFViewer(QWidget):
         if not self.is_valid:
             return
         try:
-            # Clear existing page labels
+            # Clear existing page labels.
+            #
+            # IMPORTANT: deleteLater() only *schedules* deletion for the
+            # next pass through Qt's event loop - it does not free anything
+            # immediately. Every one of these old labels is still holding
+            # its full-size QPixmap in memory while the loop below builds
+            # a brand new set of pixmaps for the same document. On a
+            # refresh/recompile (the normal case - this function runs again
+            # on a viewer that's already showing the previous version of
+            # the PDF), that means *both* the old and new full set of page
+            # images are alive in memory at once, right at the moment
+            # memory is most contested. Explicitly dropping each label's
+            # pixmap right here releases that memory immediately instead
+            # of leaving it to whenever Qt gets around to the deferred
+            # deletion.
             for label in self.page_labels:
+                label.setPixmap(QPixmap())
                 label.deleteLater()
             self.page_labels.clear()
 
@@ -4348,6 +4544,15 @@ class PDFViewer(QWidget):
                 return
 
             ppl = getattr(self, 'pages_per_line', 1)
+
+            # Force a collection pass now, after the old labels' pixmaps
+            # were just dropped above, so that memory is actually returned
+            # before we start allocating the new set of pages. On a 32-bit
+            # process this matters more than usual - it's not just about
+            # total bytes freed, but about getting large contiguous blocks
+            # back before fragmentation from other allocations sets in.
+            import gc
+            gc.collect()
 
             for row_start in range(0, self.total_pages, ppl):
                 # Create a row container when displaying multiple pages per line
@@ -4363,34 +4568,107 @@ class PDFViewer(QWidget):
                     if page_num >= self.total_pages:
                         break
 
-                    page = self.pdf_document[page_num]
+                    # Each page is rendered in its own try/except. Previously
+                    # the whole render_all_pages() call was wrapped in a
+                    # single outer try/except, so if *any* single page threw
+                    # an exception for *any* reason, the entire document came
+                    # back blank - and stayed blank on every refresh, since
+                    # whatever triggered it would trigger again identically.
+                    # Isolating each page means one bad page just gets
+                    # skipped (with a clear error printed) instead of taking
+                    # down the whole view.
+                    try:
+                        page = self.pdf_document[page_num]
 
-                    # Render page to pixmap
-                    mat = fitz.Matrix(self.zoom_factor, self.zoom_factor)
-                    pix = page.get_pixmap(matrix=mat)
-                    img_data = pix.tobytes("ppm")
-                    qpixmap = QPixmap()
-                    qpixmap.loadFromData(img_data)
+                        # Render page to pixmap
+                        # Guard against a degenerate zoom factor (e.g.
+                        # computed as 0 by fit_to_text_width()/
+                        # fit_page_to_window() if they ever run before the
+                        # viewport has a real size) - a zero/negative zoom
+                        # produces a zero-size fitz pixmap, which used to
+                        # render nothing with no visible error, and would
+                        # keep doing so on every refresh since zoom_factor
+                        # is persisted on self. Also cap the top end: a
+                        # runaway-large zoom multiplies both page dimensions,
+                        # so memory for the resulting bitmap grows with the
+                        # *square* of the zoom factor - on a 32-bit process
+                        # that can exhaust available memory well before any
+                        # normal document would.
+                        if not self.zoom_factor or self.zoom_factor <= 0:
+                            self.zoom_factor = 1.0
+                        elif self.zoom_factor > 2.0:
+                            self.zoom_factor = 2.0
+                        mat = fitz.Matrix(self.zoom_factor, self.zoom_factor)
+                        pix = page.get_pixmap(matrix=mat)
+                        qpixmap = fitz_pixmap_to_qpixmap(pix)
+                        pix = None  # drop the fitz Pixmap the instant we're
+                                    # done with it - it holds its own
+                                    # separate copy of the raw pixel data
+                                    # alongside the QPixmap we just built.
+                        if qpixmap is None:
+                            # Retry once at half the zoom in case the
+                            # allocation simply failed for this page's size
+                            # at the current zoom (e.g. a very large page,
+                            # or memory that's already tight from earlier
+                            # pages in this same document) - better to show
+                            # a smaller page than none at all.
+                            pix = None
+                            retry_zoom = max(self.zoom_factor / 2.0, 0.25)
+                            retry_mat = fitz.Matrix(retry_zoom, retry_zoom)
+                            retry_pix = page.get_pixmap(matrix=retry_mat)
+                            qpixmap = fitz_pixmap_to_qpixmap(retry_pix)
+                            retry_pix = None
+                            if qpixmap is None:
+                                print(f"❌ Failed to render page {page_num} to a "
+                                      f"pixmap (zoom={self.zoom_factor}, retry "
+                                      f"at {retry_zoom} also failed); skipping "
+                                      f"this page.")
+                                continue
+                            else:
+                                print(f"⚠️ Page {page_num} rendered at reduced "
+                                      f"zoom ({retry_zoom} instead of "
+                                      f"{self.zoom_factor}) after the first "
+                                      f"attempt ran out of memory.")
 
-                    # Extract hyperlinks
-                    links = self._extract_page_links(page, self.zoom_factor)
+                        # Extract hyperlinks
+                        links = self._extract_page_links(page, self.zoom_factor)
 
-                    # Create label
-                    page_label = SelectablePageLabel(page_num, self, links=links)
-                    page_label.setPixmap(qpixmap)
-                    page_label.setAlignment(Qt.AlignCenter)
-                    self.page_labels.append(page_label)
+                        # Create label
+                        page_label = SelectablePageLabel(page_num, self, links=links)
+                        page_label.setPixmap(qpixmap)
+                        page_label.setAlignment(Qt.AlignCenter)
+                        self.page_labels.append(page_label)
 
-                    if ppl > 1:
-                        row_layout.addWidget(page_label)
-                    else:
-                        self.content_layout.addWidget(page_label)
-
+                        if ppl > 1:
+                            row_layout.addWidget(page_label)
+                        else:
+                            self.content_layout.addWidget(page_label)
+                    except Exception as page_err:
+                        print(f"❌ Error rendering page {page_num}: {page_err}")
+                        import traceback
+                        traceback.print_exc()
+                        continue
                 if ppl > 1:
                     self.content_layout.addWidget(row_widget)
 
             #print(f"✅ Rendered {len(self.page_labels)} pages "
             #      f"({ppl} per line)\n")
+
+            # If every page failed to render (or something upstream left
+            # total_pages > 0 but nothing got created), the viewer would
+            # otherwise just show a blank pane the same color as its own
+            # background - which looks exactly like "nothing happened" and
+            # gives no clue anything went wrong. Show an explicit message
+            # instead so a real failure is visible rather than silent.
+            if not self.page_labels and self.total_pages > 0:
+                notice = QLabel(
+                    "⚠️ This PDF could not be displayed.\n"
+                    "Check the console/log for the page-rendering error."
+                )
+                notice.setAlignment(Qt.AlignCenter)
+                notice.setStyleSheet("padding: 30px; font-size: 11pt;")
+                self.content_layout.addWidget(notice)
+
             self.update_page_controls()
         except Exception as e:
             print(f"❌ Error rendering pages: {e}")
@@ -4859,9 +5137,12 @@ class PDFViewer(QWidget):
             ]
 
             # ── Suppress console window on Windows ──
+            # NOTE: do NOT use text=True here.  It decodes the output with the
+            # Windows ANSI code page (cp1252...), while synctex prints file
+            # names as UTF-8: "Rapidité.tex" became "RapiditÃ©.tex" and the
+            # file could not be opened.  Capture bytes and decode ourselves.
             kwargs = {
                 'capture_output': True,
-                'text': True,
                 'timeout': 10,
                 'cwd': pdf_dir
             }
@@ -4876,7 +5157,7 @@ class PDFViewer(QWidget):
             result = subprocess.run(command, **kwargs)
 
             if result.returncode == 0:
-                output = result.stdout.strip()
+                output = self._decode_synctex_bytes(result.stdout).strip()
                 if output:
                     self.parse_synctex_output(output)
                 else:
@@ -4884,7 +5165,7 @@ class PDFViewer(QWidget):
                         self.main_window.update_status_bar(
                             "No source location found at this position")
             else:
-                error_msg = result.stderr.strip()
+                error_msg = self._decode_synctex_bytes(result.stderr).strip()
                 if hasattr(self.main_window, 'update_status_bar'):
                     self.main_window.update_status_bar(f"SyncTeX error: {error_msg}")
 
@@ -4899,6 +5180,76 @@ class PDFViewer(QWidget):
             traceback.print_exc()
             if hasattr(self.main_window, 'update_status_bar'):
                 self.main_window.update_status_bar(f"Reverse search error: {str(e)}")
+
+    @staticmethod
+    def _decode_synctex_bytes(data):
+        """Decode raw synctex output (UTF-8 first, then the system code page)."""
+        if data is None:
+            return ""
+        if isinstance(data, str):
+            return data
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
+        import locale
+        for enc in (locale.getpreferredencoding(False), sys.getfilesystemencoding(), 'latin-1'):
+            try:
+                return data.decode(enc)
+            except (UnicodeDecodeError, LookupError, TypeError):
+                continue
+        return data.decode('utf-8', errors='replace')
+
+    def _resolve_synctex_source_path(self, tex_file):
+        """Turn the 'Input:' path printed by synctex into a real file path.
+
+        Handles (a) relative paths (relative to the PDF folder, not the app's
+        cwd), (b) UTF-8 text that was mis-decoded as a single-byte code page
+        (mojibake such as 'RapiditÃ©.tex'), and (c) Unicode normalisation
+        differences (NFC/NFD) in accented names.
+        """
+        import unicodedata
+        pdf_dir = os.path.dirname(self.current_pdf_path) if self.current_pdf_path else os.getcwd()
+
+        def _absolute(path):
+            if not os.path.isabs(path):
+                path = os.path.join(pdf_dir, path)
+            return os.path.abspath(path)
+
+        candidates = [tex_file]
+        # undo mojibake: text that is really UTF-8 but was decoded as cp1252/latin-1/...
+        for enc in ('cp1252', 'latin-1', 'cp1250', 'cp850', 'cp437', 'mac_roman'):
+            try:
+                fixed = tex_file.encode(enc).decode('utf-8')
+                if fixed != tex_file:
+                    candidates.append(fixed)
+            except (UnicodeEncodeError, UnicodeDecodeError, LookupError):
+                continue
+        for form in ('NFC', 'NFD'):
+            for c in list(candidates):
+                candidates.append(unicodedata.normalize(form, c))
+
+        for c in candidates:
+            full = _absolute(c)
+            if os.path.exists(full):
+                return full
+
+        # Last resort: match by file name (NFC-normalised) among the files
+        # already open in the editor, then among the files in the PDF folder.
+        wanted_names = {unicodedata.normalize('NFC', os.path.basename(c.replace('\\', '/'))) for c in candidates}
+        em = getattr(self.main_window, 'editor_manager', None)
+        pools = []
+        if em is not None:
+            pools.append(list(getattr(em, 'editor_files', {}).keys()))
+        try:
+            pools.append([os.path.join(pdf_dir, f) for f in os.listdir(pdf_dir)])
+        except OSError:
+            pass
+        for pool in pools:
+            for path in pool:
+                if unicodedata.normalize('NFC', os.path.basename(path)) in wanted_names and os.path.exists(path):
+                    return os.path.abspath(path)
+        return _absolute(tex_file)
 
     def parse_synctex_output(self, output):
         """Parse SyncTeX output and jump to source location - FIXED for H/V mode"""
@@ -4928,8 +5279,8 @@ class PDFViewer(QWidget):
                     self.main_window.update_status_bar("Could not parse SyncTeX output")
                 return
             
-            # Normalize the file path
-            tex_file = os.path.abspath(tex_file)
+            # Normalize the file path (handles relative paths and accented names)
+            tex_file = self._resolve_synctex_source_path(tex_file)
             
             # ✅ Check if file is already open (works for both tabbed and H/V modes)
             if hasattr(self.main_window, 'editor_manager'):
@@ -5685,6 +6036,50 @@ class PDFViewer(QWidget):
         except Exception as e:
             print(f"Error extracting text: {str(e)}")
     
+    def extract_selected_image(self):
+        """Render the selected area of the page as an image and copy it to the clipboard."""
+        if not self.pdf_document or not self.selection_rect:
+            return
+        try:
+            page_num = self.get_page_from_position(self.selection_start)
+            if not (0 <= page_num < len(self.pdf_document)):
+                return
+            page = self.pdf_document[page_num]
+            page_rect = self.page_labels[page_num].geometry()
+            z = self.zoom_factor
+            r = self.selection_rect
+
+            # Same screen -> PDF coordinate conversion as extract_selected_text()
+            clip = fitz.Rect(
+                (r.x() - page_rect.x()) / z,
+                (r.y() - page_rect.y()) / z,
+                (r.right() - page_rect.x()) / z,
+                (r.bottom() - page_rect.y()) / z,
+            )
+            clip = clip & page.rect          # keep only the part that lies on the page
+            if clip.is_empty or clip.width < 2 or clip.height < 2:
+                if hasattr(self.main_window, 'update_status_bar'):
+                    self.main_window.update_status_bar("Image selection too small - drag a larger area")
+                return
+
+            # Render at ~300 dpi (independent of the on-screen zoom), capped so a
+            # huge selection cannot exhaust memory.
+            scale = 300.0 / 72.0
+            scale = min(scale, 10000.0 / max(clip.width, clip.height))
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+            qpix = fitz_pixmap_to_qpixmap(pix)
+            if qpix is None or qpix.isNull():
+                if hasattr(self.main_window, 'update_status_bar'):
+                    self.main_window.update_status_bar("Could not render the selected area")
+                return
+
+            QApplication.clipboard().setPixmap(qpix)
+            if hasattr(self.main_window, 'update_status_bar'):
+                self.main_window.update_status_bar(
+                    f"Image copied to clipboard ({qpix.width()}\u00d7{qpix.height()} px, page {page_num + 1})")
+        except Exception as e:
+            print(f"Error extracting image: {str(e)}")
+
     def get_page_from_position(self, pos):
         """Get page number from position (pos in content_widget coordinates)"""
         for i, page_label in enumerate(self.page_labels):
@@ -5828,9 +6223,9 @@ class PDFViewer(QWidget):
                     mat = fitz.Matrix(scale, scale)
                     pix = page.get_pixmap(matrix=mat)
 
-                    img_data = pix.tobytes("ppm")
-                    pixmap = QPixmap()
-                    pixmap.loadFromData(img_data)
+                    pixmap = fitz_pixmap_to_qpixmap(pix)
+                    if pixmap is None:
+                        pixmap = QPixmap()
 
                     scaled_pixmap = pixmap.scaled(
                         printer_rect.size(),
@@ -6585,7 +6980,7 @@ class SelectablePageLabel(QLabel):
                     if self.pdf_viewer.reverse_search_mode:
                         self.setCursor(Qt.CrossCursor)
                     elif self.pdf_viewer.select_mode:
-                        self.setCursor(Qt.IBeamCursor)
+                        self.setCursor(self.pdf_viewer._select_cursor())
                     elif self.pdf_viewer.panning:
                         self.setCursor(Qt.ClosedHandCursor)
                     elif self.pdf_viewer.pan_mode:
@@ -6684,7 +7079,7 @@ class SelectablePageLabel(QLabel):
                 else:
                     self.setCursor(Qt.CrossCursor)
             elif self.pdf_viewer.select_mode:
-                self.setCursor(Qt.IBeamCursor)
+                self.setCursor(self.pdf_viewer._select_cursor())
             else:
                 self.setCursor(Qt.OpenHandCursor)
             
@@ -6712,7 +7107,10 @@ class SelectablePageLabel(QLabel):
             self.selecting = False
             self.pdf_viewer.selecting = False
             if self.selection_start and self.selection_end:
-                self.pdf_viewer.extract_selected_text()
+                if getattr(self.pdf_viewer, 'select_kind', 'text') == 'image':
+                    self.pdf_viewer.extract_selected_image()
+                else:
+                    self.pdf_viewer.extract_selected_text()
             self.selection_start = None
             self.selection_end = None
             self.pdf_viewer.selection_rect = None
@@ -6806,7 +7204,7 @@ class SelectablePageLabel(QLabel):
             self.pdf_viewer.magnifier_pos = None
             
             if self.pdf_viewer.select_mode:
-                self.setCursor(Qt.IBeamCursor)
+                self.setCursor(self.pdf_viewer._select_cursor())
             else:
                 self.setCursor(Qt.OpenHandCursor)
             self.update()
@@ -6820,7 +7218,8 @@ class SelectablePageLabel(QLabel):
         try:
             # Draw TEXT SELECTION rectangle
             if self.selecting and self.selection_start and self.selection_end and self.pdf_viewer.select_mode:
-                pen = QPen(Qt.blue, 2, Qt.DashLine)
+                is_image = getattr(self.pdf_viewer, 'select_kind', 'text') == 'image'
+                pen = QPen(QColor(46, 160, 67) if is_image else QColor(Qt.blue), 2, Qt.DashLine)
                 painter.setPen(pen)
                 start_x = min(self.selection_start.x(), self.selection_end.x())
                 start_y = min(self.selection_start.y(), self.selection_end.y())
@@ -6928,9 +7327,9 @@ class SelectablePageLabel(QLabel):
                 pix = page.get_pixmap(matrix=zoom_matrix, clip=pdf_clip_rect)
                 
                 # Convert to QPixmap
-                img_data = pix.tobytes("ppm")
-                high_res_pixmap = QPixmap()
-                high_res_pixmap.loadFromData(img_data)
+                high_res_pixmap = fitz_pixmap_to_qpixmap(pix)
+                if high_res_pixmap is None:
+                    high_res_pixmap = QPixmap()
                 
                 # Scale to final magnifier size with high quality
                 magnified_pixmap = high_res_pixmap.scaled(
