@@ -40,6 +40,12 @@ class ResizableImageWidget(QWidget):
         self.last_point = None
         self.brush_size = 4
         self.brush_color = QColor(Qt.red)
+        # Crop tool state
+        self.crop_mode = False
+        self.crop_start = None          # QPoint in label coordinates
+        self.crop_rect_label = None     # QRect in label coordinates (rubber band)
+        self._crop_undo = []            # [(original_image, editable_pixmap), ...]
+        self._fitted_on_show = False
         # Keep a mutable copy for drawing
         #self.editable_pixmap = pixmap.copy()
         self.setup_ui()
@@ -92,6 +98,22 @@ class ResizableImageWidget(QWidget):
         reset_btn.clicked.connect(self.reset_size)
         reset_btn.setToolTip("Original size")
         btn_layout.addWidget(reset_btn)
+
+        # --- Crop button: drag a rectangle on the image, then confirm ---
+        self.crop_btn = QPushButton("\u2702")   # ✂
+        self.crop_btn.setFixedSize(30, 24)
+        self.crop_btn.setCheckable(True)
+        self.crop_btn.setToolTip("Crop: drag a rectangle on the image to cut out that area")
+        self.crop_btn.clicked.connect(self.toggle_crop_mode)
+        btn_layout.addWidget(self.crop_btn)
+
+        # --- Undo crop (visible only after a crop) ---
+        self.uncrop_btn = QPushButton("\u21B6")   # ↶
+        self.uncrop_btn.setFixedSize(30, 24)
+        self.uncrop_btn.setToolTip("Undo last crop")
+        self.uncrop_btn.clicked.connect(self.undo_crop)
+        self.uncrop_btn.setVisible(False)
+        btn_layout.addWidget(self.uncrop_btn)
 
         copy_btn = QPushButton("📋")
         copy_btn.setFixedSize(30, 24)
@@ -155,6 +177,7 @@ class ResizableImageWidget(QWidget):
     # ------------------------------------------------------------------ #
     def toggle_draw_mode(self):
         if self.paintbrush_btn.isChecked():
+            self._exit_crop_mode()
             # Ask for color
             from PyQt5.QtWidgets import QColorDialog
             color = QColorDialog.getColor(self.brush_color, self, "Pick brush color")
@@ -169,7 +192,8 @@ class ResizableImageWidget(QWidget):
             self._exit_drawing_mode()
 
     def toggle_erase_mode(self):
-        if self.eraser_btn.isChecked():           
+        if self.eraser_btn.isChecked():
+            self._exit_crop_mode()
             self.drawing_mode = 'erase'
             self.paintbrush_btn.setChecked(False)
             self.paintbrush_btn.setStyleSheet("")
@@ -205,16 +229,38 @@ class ResizableImageWidget(QWidget):
     #  Drawing logic — called by DrawableLabel mouse events
     # ------------------------------------------------------------------ #
     def on_mouse_press(self, event):
+        if self.crop_mode:
+            if event.button() == Qt.LeftButton:
+                self.crop_start = self._clamp_to_image_rect(event.pos())
+                self.crop_rect_label = None
+                self.image_label.update()
+            return
         if self.drawing_mode and event.button() == Qt.LeftButton:
             self.last_point = self._to_pixmap_coords(event.pos())
 
     def on_mouse_move(self, event):
+        if self.crop_mode:
+            if self.crop_start is not None and (event.buttons() & Qt.LeftButton):
+                end = self._clamp_to_image_rect(event.pos())
+                self.crop_rect_label = QRect(self.crop_start, end).normalized()
+                self.image_label.update()
+            return
         if self.drawing_mode and (event.buttons() & Qt.LeftButton) and self.last_point:
             current_point = self._to_pixmap_coords(event.pos())
             self._paint_line(self.last_point, current_point)
             self.last_point = current_point
 
     def on_mouse_release(self, event):
+        if self.crop_mode:
+            if event.button() == Qt.LeftButton and self.crop_start is not None:
+                self.crop_start = None
+                r = self.crop_rect_label
+                if r is not None and r.width() >= 4 and r.height() >= 4:
+                    self._confirm_crop(event.globalPos())
+                else:
+                    self.crop_rect_label = None
+                    self.image_label.update()
+            return
         self.last_point = None
 
     def _to_pixmap_coords(self, label_pos):
@@ -291,6 +337,93 @@ class ResizableImageWidget(QWidget):
     # ------------------------------------------------------------------ #
     #  Existing methods (unchanged except update_image uses editable_pixmap)
     # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    #  Crop tool
+    # ------------------------------------------------------------------ #
+    def _image_rect_in_label(self):
+        """Rectangle (label coordinates) actually covered by the displayed image."""
+        pm = self.image_label.pixmap()
+        if pm is None or pm.isNull():
+            return QRect()
+        x = (self.image_label.width() - pm.width()) // 2
+        y = (self.image_label.height() - pm.height()) // 2
+        return QRect(x, y, pm.width(), pm.height())
+
+    def _clamp_to_image_rect(self, pos):
+        r = self._image_rect_in_label()
+        return QPoint(max(r.left(), min(pos.x(), r.right())),
+                      max(r.top(), min(pos.y(), r.bottom())))
+
+    def toggle_crop_mode(self):
+        if self.crop_btn.isChecked():
+            self._exit_drawing_mode()
+            self.crop_mode = True
+            self.crop_rect_label = None
+            self.crop_start = None
+            self.image_label.setCursor(Qt.CrossCursor)
+            self.crop_btn.setStyleSheet("background: #bbdefb;")   # light blue = active
+        else:
+            self._exit_crop_mode()
+
+    def _exit_crop_mode(self):
+        self.crop_mode = False
+        self.crop_start = None
+        self.crop_rect_label = None
+        if hasattr(self, "crop_btn"):
+            self.crop_btn.setChecked(False)
+            self.crop_btn.setStyleSheet("")
+        if self.drawing_mode is None:
+            self.image_label.setCursor(Qt.ArrowCursor)
+        self.image_label.update()
+
+    def _label_rect_to_image_rect(self, r):
+        """Convert a rectangle in label coordinates to editable-pixmap pixel coordinates."""
+        shown = self._image_rect_in_label()
+        if shown.isEmpty():
+            return QRect()
+        sx = self.editable_pixmap.width() / float(shown.width())
+        sy = self.editable_pixmap.height() / float(shown.height())
+        x0 = int(round((r.left() - shown.left()) * sx))
+        y0 = int(round((r.top() - shown.top()) * sy))
+        x1 = int(round((r.right() + 1 - shown.left()) * sx))
+        y1 = int(round((r.bottom() + 1 - shown.top()) * sy))
+        return QRect(QPoint(x0, y0), QPoint(x1 - 1, y1 - 1)).intersected(self.editable_pixmap.rect())
+
+    def _confirm_crop(self, global_pos):
+        menu = QMenu(self)
+        crop_act = menu.addAction("\u2702  Crop to selection")
+        menu.addSeparator()
+        menu.addAction("Cancel")
+        chosen = menu.exec_(global_pos)
+        if chosen is crop_act:
+            self.apply_crop(self._label_rect_to_image_rect(self.crop_rect_label))
+        else:
+            self.crop_rect_label = None
+            self.image_label.update()
+
+    def apply_crop(self, img_rect):
+        """Keep only img_rect (pixmap coordinates) of the image."""
+        if img_rect is None or img_rect.isNull() or img_rect.width() < 2 or img_rect.height() < 2:
+            self._exit_crop_mode()
+            return
+        self._crop_undo.append((self.original_image.copy(), self.editable_pixmap.copy()))
+        # The cropped image becomes the new base, so "erase all drawings" keeps the crop.
+        self.original_image = self.original_image.copy(img_rect)
+        self.original_pixmap = QPixmap.fromImage(self.original_image)
+        self.editable_pixmap = self.editable_pixmap.copy(img_rect)
+        self.uncrop_btn.setVisible(True)
+        self._exit_crop_mode()
+        self.update_image()
+
+    def undo_crop(self):
+        if not self._crop_undo:
+            return
+        self.original_image, self.editable_pixmap = self._crop_undo.pop()
+        self.original_pixmap = QPixmap.fromImage(self.original_image)
+        self.uncrop_btn.setVisible(bool(self._crop_undo))
+        self._exit_crop_mode()
+        self.update_image()
+
     def zoom_in(self):
         self.current_scale *= 1.25
         self.update_image()
@@ -305,17 +438,46 @@ class ResizableImageWidget(QWidget):
         self.current_scale = 1.0
         self.update_image()
 
+    def _available_width(self):
+        """Width the image may use: the visible width of the enclosing scroll area.
+
+        The old code used self.width().  After "1:1" a large image forces this
+        widget (and the scroll content) wider than the panel, so self.width()
+        already contained the image's own width and "Fit" computed a scale of
+        ~1.0 (it only shaved a few pixels per click).  The scroll area's viewport
+        is independent of the image, so it gives the right answer every time.
+        """
+        w = self.parentWidget()
+        while w is not None and not isinstance(w, QScrollArea):
+            w = w.parentWidget()
+        if w is not None:
+            width = w.viewport().width()
+            vbar = w.verticalScrollBar()
+            if not vbar.isVisible():               # leave room in case one appears
+                width -= vbar.sizeHint().width()
+            return width - 8
+        return self.width() - 10                   # not inside a scroll area (yet)
+
     def fit_to_width(self):
-        available_width = self.width() - 10
+        available_width = self._available_width()
         if available_width <= 0:
             available_width = 400
         if self.editable_pixmap.width() > 0:
             self.current_scale = available_width / self.editable_pixmap.width()
         self.update_image()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._fitted_on_show:
+            self._fitted_on_show = True
+            # Now that the widget sits in the scroll area, fit to the real width.
+            QTimer.singleShot(0, self.fit_to_width)
+
     def update_image(self):
         if self.editable_pixmap.isNull():
             return
+        self.crop_rect_label = None      # a rubber band would be stale after zoom/redraw
+        self.crop_start = None
         new_width = int(self.editable_pixmap.width() * self.current_scale)
         new_height = int(self.editable_pixmap.height() * self.current_scale)
         if new_width <= 0 or new_height <= 0:
@@ -363,6 +525,30 @@ class DrawableLabel(QLabel):
 
     def mouseReleaseEvent(self, event):
         self.drawing_widget.on_mouse_release(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        w = self.drawing_widget
+        r = getattr(w, "crop_rect_label", None)
+        if not getattr(w, "crop_mode", False) or r is None or r.isNull():
+            return
+        p = QPainter(self)
+        try:
+            shown = w._image_rect_in_label()
+            dim = QColor(0, 0, 0, 110)
+            # dim everything of the image outside the selection
+            p.fillRect(QRect(shown.left(), shown.top(), shown.width(), r.top() - shown.top()), dim)
+            p.fillRect(QRect(shown.left(), r.bottom() + 1, shown.width(), shown.bottom() - r.bottom()), dim)
+            p.fillRect(QRect(shown.left(), r.top(), r.left() - shown.left(), r.height()), dim)
+            p.fillRect(QRect(r.right() + 1, r.top(), shown.right() - r.right(), r.height()), dim)
+            pen = QPen(QColor(255, 255, 255), 1, Qt.SolidLine)
+            p.setPen(pen)
+            p.drawRect(r)
+            pen = QPen(QColor(33, 150, 243), 1, Qt.DashLine)
+            p.setPen(pen)
+            p.drawRect(r)
+        finally:
+            p.end()
 
 
 # ─────────────────────────────────────────────────────────────
