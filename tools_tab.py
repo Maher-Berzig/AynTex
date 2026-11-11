@@ -75,6 +75,13 @@ class ResizableImageWidget(QWidget):
         btn_layout.setContentsMargins(0, 0, 0, 0)
         btn_layout.setSpacing(2)
 
+        # ── Save button (PNG / JPG / BMP) ──────────────────────────
+        self.save_btn = QPushButton("💾")
+        self.save_btn.setFixedSize(30, 24)
+        self.save_btn.setToolTip("Save image as PNG, JPG, or BMP")
+        self.save_btn.clicked.connect(self.save_image)
+        btn_layout.addWidget(self.save_btn)
+
         zoom_in_btn = QPushButton("+")
         zoom_in_btn.setFixedSize(30, 24)
         zoom_in_btn.clicked.connect(self.zoom_in)
@@ -172,6 +179,58 @@ class ResizableImageWidget(QWidget):
         QApplication.processEvents()
         self.fit_to_width()
 
+
+
+    def save_image(self):
+        """Save the current image (including drawings/crops) to PNG, JPG, or BMP."""
+        try:
+            if self.editable_pixmap is None or self.editable_pixmap.isNull():
+                QMessageBox.warning(self, "Error", "No image to save.")
+                return
+
+            file_path, selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "Save Image",
+                "",
+                "PNG Image (*.png);;"
+                "JPEG Image (*.jpg *.jpeg);;"
+                "BMP Image (*.bmp)"
+            )
+            if not file_path:
+                return  # user cancelled
+
+            # Make sure the extension matches the chosen filter
+            lower = file_path.lower()
+            if selected_filter.startswith("JPEG"):
+                if not (lower.endswith(".jpg") or lower.endswith(".jpeg")):
+                    file_path += ".jpg"
+            elif selected_filter.startswith("BMP"):
+                if not lower.endswith(".bmp"):
+                    file_path += ".bmp"
+            elif selected_filter.startswith("PNG"):
+                if not lower.endswith(".png"):
+                    file_path += ".png"
+
+            pixmap = self.editable_pixmap
+
+            # JPG/BMP have no alpha channel — flatten onto a white background
+            # so transparent areas don't come out as black/garbage.
+            if not file_path.lower().endswith(".png"):
+                from PyQt5.QtGui import QPainter
+                flattened = QPixmap(pixmap.size())
+                flattened.fill(Qt.white)
+                painter = QPainter(flattened)
+                painter.drawPixmap(0, 0, pixmap)
+                painter.end()
+                pixmap = flattened
+
+            if not pixmap.save(file_path):
+                QMessageBox.warning(
+                    self, "Error",
+                    f"Failed to save image to:\n{file_path}"
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save image:\n{str(e)}")
     # ------------------------------------------------------------------ #
     #  Draw / Erase mode toggles
     # ------------------------------------------------------------------ #
