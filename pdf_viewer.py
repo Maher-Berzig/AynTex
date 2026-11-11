@@ -592,7 +592,7 @@ class PDFViewer(QWidget):
         # Navigation history
         self.back_btn = QPushButton()
         self.main_window.icons_manager.apply_icon_to_button(self.back_btn, "back_nav")
-        self.back_btn.setToolTip("Go back (Alt+Left)")
+        self.back_btn.setToolTip("Go back (Alt+Shift+Left)")
         self.back_btn.setFixedSize(BUTTON_HEIGHT, BUTTON_HEIGHT)
         self.back_btn.clicked.connect(self.navigate_back)
         self.back_btn.setEnabled(False)
@@ -618,7 +618,7 @@ class PDFViewer(QWidget):
         # Forward
         self.forward_btn = QPushButton()
         self.main_window.icons_manager.apply_icon_to_button(self.forward_btn, "forward_nav")
-        self.forward_btn.setToolTip("Go forward (Alt+Right)")
+        self.forward_btn.setToolTip("Go forward (Alt+Shift+Right)")
         self.forward_btn.setFixedSize(BUTTON_HEIGHT, BUTTON_HEIGHT)
         self.forward_btn.clicked.connect(self.navigate_forward)
         self.forward_btn.setEnabled(False)
