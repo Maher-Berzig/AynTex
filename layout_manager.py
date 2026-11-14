@@ -6,7 +6,7 @@ import os
 from PyQt5.QtWidgets import (
     QSplitter, QTabWidget, QVBoxLayout, QWidget, QTextEdit, 
     QScrollArea, QSizePolicy, QApplication, QMessageBox, 
-    QFrame, QPlainTextEdit
+    QFrame, QPlainTextEdit, QLabel
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import  QFont, QTextCursor
@@ -24,6 +24,7 @@ class LayoutManager:
         self.output_container = None
         self.terminal_widget = None
         self._recreating = False   # new flag
+        self._pdf_pane_snapshot = None  # PDF-pane content carried across a layout switch
 
         
         self.editor_vertical_splitter = None  # Store reference to prevent
@@ -1507,18 +1508,105 @@ class LayoutManager:
             print(f"Error in _safe_recreate_editor_container: {e}")
 
 
-    def toggle_pdf_layout(self):
-        """Cycle PDF layout: tabbed → horizontal → vertical → tabbed."""
-        pdf_count = 0
-        if hasattr(self.main_window.pdf_manager, 'pdf_files') and self.main_window.pdf_manager.pdf_files:
-            pdf_count = self.main_window.pdf_manager._get_active_pdf_count()
+    # Titles of placeholder tabs that are not real content
+    _PDF_PLACEHOLDER_TITLES = ("Welcome", "PDF Viewer", "No PDFs", "No Pdfs")
 
-        if pdf_count < 2:
+    def _snapshot_pdf_pane(self, detach=False):
+        """Return an ordered list of everything living in the PDF pane.
+
+        Each entry is either
+            {'kind': 'pdf',  'path': <pdf path>}
+        or  {'kind': 'tool', 'widget': w, 'title': str, 'icon': QIcon,
+             'data': tabData, 'tip': str}
+
+        Welcome / placeholder tabs are ignored.  Works in tabbed mode (one
+        QTabWidget) and in H/V mode (a QSplitter of one-tab QTabWidgets).
+
+        With detach=True every *tool* widget is taken out of its tab widget
+        and orphaned so it survives the destruction of the old pane.
+        """
+        pm = self.main_window.pdf_manager
+        viewers = {}
+        for path, data in (getattr(pm, 'pdf_files', None) or {}).items():
+            if isinstance(data, dict):
+                v = data.get('viewer')
+            elif isinstance(data, (list, tuple)) and data:
+                v = data[0]
+            else:
+                v = None
+            if v is not None:
+                viewers[id(v)] = path
+
+        items = []
+
+        def classify(tab_widget, index):
+            w = tab_widget.widget(index)
+            if w is None:
+                return
+            if id(w) in viewers:
+                items.append({'kind': 'pdf', 'path': viewers[id(w)]})
+                return
+            title = tab_widget.tabText(index)
+            if title in self._PDF_PLACEHOLDER_TITLES:
+                return
+            items.append({
+                'kind': 'tool', 'widget': w, 'title': title,
+                'icon': tab_widget.tabIcon(index),
+                'data': tab_widget.tabBar().tabData(index),
+                'tip': tab_widget.tabToolTip(index),
+                '_tw': tab_widget,
+            })
+
+        try:
+            tabs = getattr(pm, 'pdf_tabs', None)
+            splitter = getattr(pm, 'pdf_splitter', None)
+            if isinstance(tabs, QTabWidget):
+                for i in range(tabs.count()):
+                    classify(tabs, i)
+            elif splitter is not None:
+                for i in range(splitter.count()):
+                    wrapper = splitter.widget(i)
+                    if isinstance(wrapper, QTabWidget):
+                        for j in range(wrapper.count()):
+                            classify(wrapper, j)
+        except RuntimeError:
+            pass  # a Qt widget was already deleted
+
+        for it in items:
+            tw = it.pop('_tw', None)
+            if detach and it['kind'] == 'tool' and tw is not None:
+                try:
+                    idx = tw.indexOf(it['widget'])
+                    if idx >= 0:
+                        tw.removeTab(idx)
+                    it['widget'].setParent(None)
+                except RuntimeError:
+                    pass
+        return items
+
+    def get_pdf_pane_item_count(self):
+        """Number of real items in the PDF pane: PDF files + tool tabs."""
+        pm = self.main_window.pdf_manager
+        if hasattr(pm, '_clean_stale_pdf_references'):
+            pm._clean_stale_pdf_references()
+        return len(self._snapshot_pdf_pane(detach=False))
+
+    def toggle_pdf_layout(self):
+        """Cycle PDF layout: tabbed → horizontal → vertical → tabbed.
+
+        The toggle becomes active as soon as TWO items are open in the PDF
+        pane, whatever they are: two PDFs, a PDF + a tool, or two tools.
+        """
+        item_count = self.get_pdf_pane_item_count()
+
+        if item_count < 2:
             from PyQt5.QtWidgets import QMessageBox
             message = (
-                "No PDF files are currently open.\n\nPlease open at least 2 PDF files to change the layout."
-                if pdf_count == 0 else
-                "At least 2 PDF files must be opened to change the PDF layout.\n\nPlease open more PDF files to use horizontal or vertical layouts."
+                "Nothing is open in the viewer pane.\n\n"
+                "Open at least 2 tabs (PDF files and/or tools) to change the layout."
+                if item_count == 0 else
+                "At least 2 tabs (PDF files and/or tools) must be open to change the layout.\n\n"
+                "Open one more PDF or tool to use horizontal or vertical layouts."
             )
             QMessageBox.information(self.main_window, "Layout Toggle", message)
             return
@@ -1550,6 +1638,10 @@ class LayoutManager:
             pdf_layout = self.pdf_container.layout()
             if pdf_layout is None:
                 return
+            # Take tool tabs (AI Assistant, Tools, TikZ, ...) out of the old
+            # pane BEFORE it is destroyed; _recreate_pdf_container re-inserts
+            # them in the new layout.
+            self._pdf_pane_snapshot = self._snapshot_pdf_pane(detach=True)
             while pdf_layout.count():
                 item = pdf_layout.takeAt(0)
                 w = item.widget() if item else None
@@ -1943,6 +2035,14 @@ class LayoutManager:
         """Recreate PDF container with new layout mode - FIXED to preserve data and display splitters properly"""
         try:           
             #print(f"Recreating PDF container with mode: {self.main_window.pdf_manager.pdf_layout_mode}")
+            # Ordered content of the old pane (PDFs + tool tabs).  When called
+            # through _apply_pdf_layout the snapshot was already taken (and the
+            # tool widgets detached); otherwise take it now, before the old
+            # widget is destroyed below.
+            snapshot = getattr(self, '_pdf_pane_snapshot', None)
+            self._pdf_pane_snapshot = None
+            if snapshot is None:
+                snapshot = self._snapshot_pdf_pane(detach=True)
             # Store current PDF data WITHOUT clearing the manager's data
             current_pdfs = {}
             if hasattr(self.main_window.pdf_manager, 'pdf_files') and self.main_window.pdf_manager.pdf_files:
@@ -1997,86 +2097,107 @@ class LayoutManager:
                 self.main_window.pdf_manager.pdf_tabs = []  # Store multiple tab widgets
             # Add to layout
             pdf_layout.addWidget(new_pdf_widget)
-            # Restore PDF viewers - DON'T clear pdf_files
+            # Build the ordered list of things to restore: PDFs and tools,
+            # in their previous order; any PDF missing from the snapshot goes last.
+            ordered, seen = [], set()
+            for it in snapshot:
+                if it['kind'] == 'pdf':
+                    if it['path'] in current_pdfs and it['path'] not in seen:
+                        ordered.append(it)
+                        seen.add(it['path'])
+                else:
+                    ordered.append(it)
+            for pdf_path in current_pdfs:
+                if pdf_path not in seen:
+                    ordered.append({'kind': 'pdf', 'path': pdf_path})
+
+            pm = self.main_window.pdf_manager
+
             if mode == "tabbed":
-                # Standard tabbed mode - all PDFs in one tab widget
-                for pdf_path, pdf_info in current_pdfs.items():
-                    viewer = pdf_info['viewer']
-                    viewer.setParent(new_pdf_widget)
-                    tab_name = os.path.basename(pdf_path)
-                    index = new_pdf_widget.addTab(viewer, tab_name)
-                    # Update the file data with new index
-                    if pdf_path in self.main_window.pdf_manager.pdf_files:
-                        data = self.main_window.pdf_manager.pdf_files[pdf_path]
-                        if isinstance(data, list) and len(data) > 2:
-                            data[2] = index
-                        elif isinstance(data, dict):
-                            data['index'] = index
+                # Standard tabbed mode - all PDFs and tools in one tab widget
+                for it in ordered:
+                    if it['kind'] == 'pdf':
+                        pdf_path = it['path']
+                        viewer = current_pdfs[pdf_path]['viewer']
+                        viewer.setParent(new_pdf_widget)
+                        index = new_pdf_widget.addTab(viewer, os.path.basename(pdf_path))
+                        if pdf_path in pm.pdf_files:
+                            data = pm.pdf_files[pdf_path]
+                            if isinstance(data, list) and len(data) > 2:
+                                data[2] = index
+                            elif isinstance(data, dict):
+                                data['index'] = index
+                    else:
+                        w = it['widget']
+                        w.setParent(new_pdf_widget)
+                        index = new_pdf_widget.addTab(w, it['title'])
+                        if not it['icon'].isNull():
+                            new_pdf_widget.setTabIcon(index, it['icon'])
+                        if it['data'] is not None:
+                            new_pdf_widget.tabBar().setTabData(index, it['data'])
+                        if it['tip']:
+                            new_pdf_widget.setTabToolTip(index, it['tip'])
+                        w.show()
             else:
-                # ✅ ONE QTabWidget PER PDF
-                for pdf_path, pdf_info in current_pdfs.items():
-                    viewer = pdf_info['viewer']
-                    # Create a new QTabWidget for this single PDF
+                # ✅ ONE QTabWidget PER ITEM (PDF or tool)
+                for it in ordered:
                     tab_widget = QTabWidget()
                     tab_widget.setTabsClosable(True)
-                    # Use the wrapper method
-                    tab_widget.tabCloseRequested.connect(self.main_window.pdf_manager.close_pdf_tab_by_signal)
-                    # ✅ FIX: Connect tabBarClicked for H/V border highlighting
-                    tab_widget.tabBarClicked.connect(
-                        lambda idx, v=viewer: self.main_window.pdf_manager._on_hv_tab_bar_clicked(idx, v)
-                    )                    
+                    tab_widget.tabCloseRequested.connect(pm.close_pdf_tab_by_signal)
                     tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
                     tab_widget.setMinimumSize(200, 150)
-                    # Add viewer
-                    tab_name = os.path.basename(pdf_path)
-                    tab_widget.addTab(viewer, tab_name)
-                    # Install shortcuts on the tab widget for H/V mode
-                    if hasattr(viewer, 'install_shortcuts_on_parent'):
-                        viewer.install_shortcuts_on_parent(tab_widget)
-                    # Store
-                    if pdf_path in self.main_window.pdf_manager.pdf_files:
-                        data = self.main_window.pdf_manager.pdf_files[pdf_path]
-                        if isinstance(data, dict):
-                            data['tab_widget'] = tab_widget
-                            data['index'] = 0
-                            data['tab_widget_index'] = new_pdf_widget.count()
-                    # Add to splitter
+                    if it['kind'] == 'pdf':
+                        pdf_path = it['path']
+                        viewer = current_pdfs[pdf_path]['viewer']
+                        # ✅ FIX: Connect tabBarClicked for H/V border highlighting
+                        tab_widget.tabBarClicked.connect(
+                            lambda idx, v=viewer: pm._on_hv_tab_bar_clicked(idx, v)
+                        )
+                        tab_widget.addTab(viewer, os.path.basename(pdf_path))
+                        # Install shortcuts on the tab widget for H/V mode
+                        if hasattr(viewer, 'install_shortcuts_on_parent'):
+                            viewer.install_shortcuts_on_parent(tab_widget)
+                        if pdf_path in pm.pdf_files:
+                            data = pm.pdf_files[pdf_path]
+                            if isinstance(data, dict):
+                                data['tab_widget'] = tab_widget
+                                data['wrapper'] = tab_widget
+                                data['index'] = 0
+                                data['tab_widget_index'] = new_pdf_widget.count()
+                    else:
+                        w = it['widget']
+                        index = tab_widget.addTab(w, it['title'])
+                        if not it['icon'].isNull():
+                            tab_widget.setTabIcon(index, it['icon'])
+                        if it['data'] is not None:
+                            tab_widget.tabBar().setTabData(index, it['data'])
+                        if it['tip']:
+                            tab_widget.setTabToolTip(index, it['tip'])
+                        w.show()
                     new_pdf_widget.addWidget(tab_widget)
                 # ✅ Equal sizes
                 if new_pdf_widget.count() > 0:
                     equal_size = 600 // new_pdf_widget.count()
                     new_pdf_widget.setSizes([equal_size] * new_pdf_widget.count())
-            # Add placeholder if no PDFs AND no tool tabs
-            if not current_pdfs:
-                # Check for tool tabs
-                tool_tabs = ["AI Assistant", "Tools", "Accessories", "Insert Character", "TikZ Plotter", "File Comparison", "PDF Comparison", "Todo list", "Spreadsheet"]
-                has_tool_tabs = False
-                
+            # Placeholder only when the pane is completely empty (no PDFs AND no tools)
+            if not ordered:
                 if mode == "tabbed":
-                    for i in range(new_pdf_widget.count()):
-                        if new_pdf_widget.tabText(i) in tool_tabs:
-                            has_tool_tabs = True
-                            break
-                
-                # Only show placeholder if no tool tabs exist
-                if not has_tool_tabs:
-                    if mode == "tabbed":
-                        welcome_content = self._create_pdf_welcome_content()
-                        new_pdf_widget.addTab(welcome_content, "PDF Viewer")
-                        new_pdf_widget.setTabsClosable(False)
-                    else:
-                        # H/V mode placeholder
-                        for i in range(2):
-                            tab_widget = QTabWidget()
-                            tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                            tab_widget.setMinimumSize(200, 150)
-                            placeholder_label = QLabel(f"No PDF files loaded\n\nSection {i+1}")
-                            placeholder_label.setAlignment(Qt.AlignCenter)
-                            placeholder_label.setStyleSheet("color: #666; font-size: 14px; padding: 20px;")
-                            tab_widget.addTab(placeholder_label, "No PDFs")
-                            new_pdf_widget.addWidget(tab_widget)
-                        new_pdf_widget.setSizes([400, 400])
-                        self.main_window.pdf_manager.pdf_tabs = [new_pdf_widget.widget(0), new_pdf_widget.widget(1)]
+                    welcome_content = self._create_pdf_welcome_content()
+                    new_pdf_widget.addTab(welcome_content, "PDF Viewer")
+                    new_pdf_widget.setTabsClosable(False)
+                else:
+                    # H/V mode placeholder
+                    for i in range(2):
+                        tab_widget = QTabWidget()
+                        tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                        tab_widget.setMinimumSize(200, 150)
+                        placeholder_label = QLabel(f"No PDF files loaded\n\nSection {i+1}")
+                        placeholder_label.setAlignment(Qt.AlignCenter)
+                        placeholder_label.setStyleSheet("color: #666; font-size: 14px; padding: 20px;")
+                        tab_widget.addTab(placeholder_label, "No PDFs")
+                        new_pdf_widget.addWidget(tab_widget)
+                    new_pdf_widget.setSizes([400, 400])
+                    pm.pdf_tabs = [new_pdf_widget.widget(0), new_pdf_widget.widget(1)]
             
             # Force visibility and update
             new_pdf_widget.show()
