@@ -686,8 +686,22 @@ class TabContextMenu:
             except RuntimeError:
                 pass   # QTabWidget already destroyed — skip
 
-        # H/V mode: pdf_tabs is [] — each PDF lives in its own QTabWidget
-        # stored as pdf_files[path]['tab_widget']
+        # H/V mode: every item (PDF or tool) lives in its own QTabWidget,
+        # a direct child of the splitter
+        splitter = getattr(pm, 'pdf_splitter', None)
+        if splitter is not None:
+            try:
+                for i in range(splitter.count()):
+                    tw = splitter.widget(i)
+                    if isinstance(tw, QTabWidget):
+                        tb = tw.tabBar()
+                        if id(tb) not in attached:
+                            self._attach(tb, self._show_pdf_menu, is_pdf=True)
+                            attached.add(id(tb))
+            except RuntimeError:
+                pass
+
+        # H/V mode (legacy path): PDF tab widgets stored as pdf_files[path]['tab_widget']
         if hasattr(pm, 'pdf_files'):
             for path, data in pm.pdf_files.items():
                 if not isinstance(data, dict):
