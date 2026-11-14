@@ -98,8 +98,13 @@ class GlobalPDFClickMonitor(QObject):
     def eventFilter(self, obj, event):
         """Track clicks on any PDF viewer"""
         if event.type() == QEvent.MouseButtonPress:
-            # Find which viewer was clicked
-            viewer = self._find_viewer_for_widget(obj)
+            # Find which viewer was clicked.  During a layout switch the old
+            # QTabWidget panes are deleted (deleteLater) while events can still
+            # arrive, so any lookup may hit a dead C++ object.
+            try:
+                viewer = self._find_viewer_for_widget(obj)
+            except RuntimeError:
+                return False
             if viewer:
                 from time import time
                 import os
@@ -149,26 +154,35 @@ class GlobalPDFClickMonitor(QObject):
                         viewer = data.get('viewer')
                         wrapper = data.get('wrapper')
                         
-                        if wrapper and self._is_inside(widget, wrapper):
-                            return viewer
-                        
-                        if viewer and self._is_inside(widget, viewer):
-                            return viewer
+                        try:
+                            if wrapper and self._is_inside(widget, wrapper):
+                                return viewer
+                            
+                            if viewer and self._is_inside(widget, viewer):
+                                return viewer
+                        except RuntimeError:
+                            continue   # stale entry: its widget was deleted
             
-            current = current.parent()
+            try:
+                current = current.parent()
+            except RuntimeError:
+                return None   # parent chain contains a deleted widget
             depth += 1
         
         return None
     
     def _is_inside(self, child, parent):
-        """Check if child is inside parent widget"""
+        """Check if child is inside parent widget (False if any widget is deleted)"""
         if not child or not parent:
             return False
-        widget = child
-        while widget:
-            if widget == parent:
-                return True
-            widget = widget.parent()
+        try:
+            widget = child
+            while widget:
+                if widget is parent:
+                    return True
+                widget = widget.parent()
+        except RuntimeError:
+            return False
         return False
 class PDFManager:
     def __init__(self, main_window):
@@ -1507,37 +1521,22 @@ class PDFManager:
                         break
                 #print(f"DEBUG: Found sender at splitter index: {splitter_index}")
                 if splitter_index >= 0:
-                    # ✅ If closing will leave only one PDF, switch to tabbed mode FIRST, then close
-                    if len(self.pdf_files) == 2:
-                        #print("DEBUG: Only one PDF will remain — switching to tabbed mode")
-                        # Store the PDF path to close AFTER recreation
-                        pdf_path_to_close = None
+                    # ✅ If closing will leave only one item (PDF or tool), switch to tabbed mode FIRST, then close
+                    lm = getattr(self.main_window, 'layout_manager', None)
+                    if lm is not None and lm.get_pdf_pane_item_count() == 2:
                         wrapper = self.pdf_splitter.widget(splitter_index)
-                        if isinstance(wrapper, QTabWidget) and wrapper.count() > 0:
-                            viewer = wrapper.widget(0)
-                            for path, data in self.pdf_files.items():
-                                if isinstance(data, dict) and data.get('viewer') == viewer:
-                                    pdf_path_to_close = path
-                                    break
-                        
+                        target_widget = wrapper.widget(0) if isinstance(wrapper, QTabWidget) and wrapper.count() > 0 else None
+
                         # Switch to tabbed mode
                         self.pdf_layout_mode = "tabbed"
-                        if hasattr(self.main_window, 'layout_manager') and hasattr(self.main_window.layout_manager, '_recreate_pdf_container'):
-                            self.main_window.layout_manager._recreate_pdf_container()
+                        lm._recreate_pdf_container()
                         if hasattr(self.main_window, 'config_manager'):
                             self.main_window.config_manager.set_config_value('layout', 'pdf_layout_mode', "tabbed")
-                        
-                        # ✅ Now close the PDF in tabbed mode
-                        if pdf_path_to_close:
-                            # Find the tab index for this PDF
-                            tab_index = -1
-                            for i in range(self.pdf_tabs.count()):
-                                widget = self.pdf_tabs.widget(i)
-                                if widget == self.pdf_files[pdf_path_to_close].get('viewer'):
-                                    tab_index = i
-                                    break
+
+                        # ✅ Now close that item (PDF or tool) in tabbed mode
+                        if target_widget is not None and isinstance(self.pdf_tabs, QTabWidget):
+                            tab_index = self.pdf_tabs.indexOf(target_widget)
                             if tab_index >= 0:
-                                print(f"DEBUG: Closing PDF {pdf_path_to_close} at tab index {tab_index} after mode switch")
                                 return self.close_pdf_tab(tab_index)
                         return
                     return self.close_pdf_tab(splitter_index)
@@ -1723,8 +1722,11 @@ class PDFManager:
             wrapper.setParent(None)
             wrapper.deleteLater()
 
-            # ✅ If only 1 PDF remains, switch to tabbed mode
-            if len(self.pdf_files) == 1:
+            lm = getattr(self.main_window, 'layout_manager', None)
+            remaining_items = lm.get_pdf_pane_item_count() if lm is not None else len(self.pdf_files)
+
+            # ✅ If only 1 item (PDF or tool) remains, switch to tabbed mode
+            if remaining_items == 1:
                 #print("DEBUG: Only 1 PDF remains in H/V mode - switching to tabbed")
                 self.pdf_layout_mode = "tabbed"
                 if hasattr(self.main_window, 'config_manager'):
@@ -1733,7 +1735,7 @@ class PDFManager:
                     self.main_window.layout_manager._recreate_pdf_container()
 
             # ✅ If no PDFs remain, show welcome
-            elif len(self.pdf_files) == 0 and show_welcome:
+            elif remaining_items == 0 and show_welcome:
                 self.pdf_layout_mode = "tabbed"
                 if hasattr(self.main_window, 'config_manager'):
                     self.main_window.config_manager.set_config_value('layout', 'pdf_layout_mode', 'tabbed')
