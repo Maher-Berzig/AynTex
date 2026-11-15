@@ -26,7 +26,7 @@ import os
 #
 # Log file:  %APPDATA%\\Ayntex\\startup.log   (falls back to %TEMP%)
 # ─────────────────────────────────────────────────────────────────────────
-import time
+#import time
 import traceback
 
 def _open_startup_log():
@@ -54,13 +54,13 @@ def _log(text):
     except Exception:
         pass
 
-try:
-    import platform as _platform
-    _log("\n=== AynTex start %s | frozen=%s | Python %s | %s ===" % (
-        time.strftime("%Y-%m-%d %H:%M:%S"), getattr(sys, "frozen", False),
-        sys.version.split()[0], _platform.platform()))
-except Exception:
-    pass
+# try:
+    # import platform as _platform
+    # _log("\n=== AynTex start %s | frozen=%s | Python %s | %s ===" % (
+        # time.strftime("%Y-%m-%d %H:%M:%S"), getattr(sys, "frozen", False),
+        # sys.version.split()[0], _platform.platform()))
+# except Exception:
+    # pass
 
 # (1) windowed exe: make sure the standard streams exist
 try:
@@ -113,7 +113,7 @@ def _fast_exit(code=0):
         code = int(bool(code))
     elif not isinstance(code, int):
         code = 1
-    _log("exit: leaving the process (code %s)" % code)
+    #_log("exit: leaving the process (code %s)" % code)
     try:
         from PyQt5.QtCore import QThreadPool
         QThreadPool.globalInstance().clear()      # drop queued spell-check jobs
