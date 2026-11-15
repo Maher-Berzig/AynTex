@@ -282,6 +282,17 @@ class LaTeXHighlighter(QSyntaxHighlighter):
         self.paren_format =  paren_format
     
     def highlightBlock(self, text):
+        # While attach_lazily() is waiting for Qt's own (blocking) full-document
+        # pass to go by, do nothing: the sliced incremental pass does the work.
+        if getattr(self, "_skip_highlighting", False):
+            # Give every block a defined state.  Blocks that were never
+            # highlighted have state -1; the first real rehighlightBlock() would
+            # then see a "state change" and make Qt cascade through the WHOLE
+            # remaining document in one go (a long freeze).  With state NORMAL a
+            # cascade only follows an actual multi-line construct.
+            self.setCurrentBlockState(self.NORMAL)
+            return
+
         # 1. Regex rules
         for pattern, format_obj in self.highlighting_rules:
             expression = QRegExp(pattern)
@@ -642,26 +653,22 @@ class LaTeXHighlighter(QSyntaxHighlighter):
         
         self.setCurrentBlockState(self.NORMAL)
         
-        # Find \[ but not \\[
+        # Find \[ but not \\[   (str.find is C speed; the former per-character
+        # Python loop ran for every line of every file)
         start_index = -1
-        i = 0
-        while i < len(text) - 1:
-            if text[i:i+2] == '\\[':
-                # Check if it's not \\[
-                if i == 0 or text[i-1] != '\\':
-                    start_index = i
-                    break
-            i += 1
+        pos = text.find('\\[')
+        while pos != -1:
+            # Check if it's not \\[
+            if pos == 0 or text[pos-1] != '\\':
+                start_index = pos
+                break
+            pos = text.find('\\[', pos + 1)
         
         # Find \]
         end_index = -1
         if start_index >= 0 or self.previousBlockState() == self.DISPLAY_MATH:
             j = start_index + 2 if start_index >= 0 else 0
-            while j < len(text) - 1:
-                if text[j:j+2] == '\\]':
-                    end_index = j
-                    break
-                j += 1
+            end_index = text.find('\\]', j)
         
         if self.previousBlockState() != self.DISPLAY_MATH:
             if start_index >= 0:
@@ -683,25 +690,37 @@ class LaTeXHighlighter(QSyntaxHighlighter):
         self.handle_environments(text)
     
     
+    _MATH_ENVIRONMENTS = (
+        'equation', 'align', 'gather', 'multline', 'split',
+        'eqnarray', 'alignat', 'flalign', 'cases', 'matrix',
+        'pmatrix', 'bmatrix', 'vmatrix', 'Vmatrix'
+    )
+
+    def _get_env_regexes(self):
+        """(begin, end) QRegExp pairs, compiled ONCE instead of 28 per line."""
+        regexes = getattr(self, "_env_regexes", None)
+        if regexes is None:
+            regexes = [
+                (QRegExp(rf'\\begin\{{{env}[*]?\}}'), QRegExp(rf'\\end\{{{env}[*]?\}}'))
+                for env in self._MATH_ENVIRONMENTS
+            ]
+            self._env_regexes = regexes
+        return regexes
+
     def handle_environments(self, text):
         """Handle multi-line LaTeX environments"""
-        math_environments = [
-            'equation', 'align', 'gather', 'multline', 'split',
-            'eqnarray', 'alignat', 'flalign', 'cases', 'matrix',
-            'pmatrix', 'bmatrix', 'vmatrix', 'Vmatrix'
-        ]
-        
+        # Fast path: every pattern below starts with "\begin{", so a line without
+        # it cannot match.  This used to compile 28 regular expressions and build
+        # a QTextCharFormat for EVERY line -- about 60% of the total highlighting
+        # time, which made opening files very slow on older PCs.
+        if '\\begin{' not in text:
+            return
+
         env_format = QTextCharFormat()
         env_format.setForeground(self.color_map.get('inline_math', QColor(0, 100, 0)))
         env_format.setBackground(self.color_map.get('inline_math_bg', QColor(240, 255, 240)))
-        
-        for env in math_environments:
-            begin_pattern = rf'\\begin\{{{env}[*]?\}}'
-            end_pattern = rf'\\end\{{{env}[*]?\}}'
-            
-            begin_regex = QRegExp(begin_pattern)
-            end_regex = QRegExp(end_pattern)
-            
+
+        for begin_regex, end_regex in self._get_env_regexes():
             start_index = begin_regex.indexIn(text)
             if start_index >= 0:
                 end_index = end_regex.indexIn(text, start_index)
@@ -710,22 +729,70 @@ class LaTeXHighlighter(QSyntaxHighlighter):
                     self.setFormat(start_index, length, env_format)
 
 
-    def rehighlight_incremental(self, chunk=50, delay=0):
-        """Rehighlight document incrementally to avoid blocking UI."""
-        block = self.document().begin()
-        self._rehighlight_block_incremental(block, chunk, delay)
+    def attach_lazily(self, document, chunk=50):
+        """Attach to `document` and highlight it in the background, ONCE.
 
-    def _rehighlight_block_incremental(self, block, chunk=50, delay=0):
-        """Process chunk blocks then yield to event loop."""
+        QSyntaxHighlighter.setDocument() always queues a zero-timer
+        rehighlight() of the WHOLE document, which runs in one go and freezes the
+        window (seconds per file on an old PC).  Restoring a session did that for
+        every file, and then ran the incremental pass on top (everything was
+        highlighted twice).  Here Qt's blocking pass finds highlightBlock()
+        switched off and returns at once; the next zero-timer (queued after
+        Qt's) switches highlighting back on and starts the sliced pass.
+        """
+        self._skip_highlighting = True
+        self.setDocument(document)
+
+        def _start():
+            self._skip_highlighting = False
+            try:
+                self.rehighlight_incremental(chunk=chunk, delay=0)
+            except RuntimeError:
+                pass        # highlighter / document deleted in the meantime
+
+        QTimer.singleShot(0, _start)
+
+    def rehighlight_incremental(self, chunk=50, delay=0, budget_ms=10, pause_ms=8):
+        """Rehighlight the document in the background without freezing the UI.
+
+        Work is done in short slices: at most `budget_ms` milliseconds (and at
+        most `chunk` blocks) per slice, then control returns to the event loop
+        for at least `pause_ms` so typing, scrolling and menus stay responsive.
+        The old version highlighted a fixed 50 blocks per slice with no pause;
+        on a slow PC one slice already froze the window for a fraction of a
+        second and the slices followed each other back to back until every
+        restored file had been processed (the "sluggish after launch" effect).
+
+        Starting a new pass cancels an older unfinished one, so the same
+        document is never highlighted by two overlapping chains.
+        """
+        self._rehighlight_generation = getattr(self, "_rehighlight_generation", 0) + 1
+        doc = self.document()
+        if doc is None:
+            return
+        block = doc.begin()
+        self._rehighlight_block_incremental(
+            block, chunk, max(delay, pause_ms), budget_ms, self._rehighlight_generation)
+
+    def _rehighlight_block_incremental(self, block, chunk=50, delay=0, budget_ms=10, generation=None):
+        """Process blocks for up to `budget_ms`, then yield to the event loop."""
         try:
+            if generation is not None and generation != getattr(self, "_rehighlight_generation", generation):
+                return                      # a newer pass has taken over
+            if self.document() is None:
+                return                      # highlighter was detached meanwhile
+            import time as _time
+            t0 = _time.perf_counter()
             processed = 0
             while block.isValid() and processed < chunk:
                 self.rehighlightBlock(block)
                 block = block.next()
                 processed += 1
+                if (_time.perf_counter() - t0) * 1000.0 >= budget_ms:
+                    break
             if block.isValid():
-                QTimer.singleShot(delay, lambda b=block:
-                    self._rehighlight_block_incremental(b, chunk, delay))
+                QTimer.singleShot(delay, lambda b=block, g=generation:
+                    self._rehighlight_block_incremental(b, chunk, delay, budget_ms, g))
         except RuntimeError:
             # The highlighter's C++ object was deleted (editor/document closed)
             # while a pending timer chunk was still in the event queue -- ignore.

@@ -1893,10 +1893,9 @@ class LayoutManager:
                         # ✅ Only update content if needed
                         if editor.toPlainText() != editor_info['content']:
                             editor.blockSignals(True)
-                            cursor = editor.textCursor()
-                            cursor.beginEditBlock()
+                            # no external edit block around setPlainText() (it clears the whole
+                            # document; see editor_manager.create_new_editor_tab)
                             editor.setPlainText(editor_info['content'])
-                            cursor.endEditBlock()
                             editor.blockSignals(False)
 
                         # ✅ Restore cursor
@@ -1969,13 +1968,12 @@ class LayoutManager:
                         # ✅ Restore content only if changed
                         if editor.toPlainText() != editor_info['content']:
                             editor.blockSignals(True)
-                            cursor = editor.textCursor()
-                            cursor.beginEditBlock()
+                            # no external edit block around the load (it replaces the whole
+                            # document; see editor_manager.create_new_editor_tab)
                             if hasattr(editor, 'loadFileContent'):
                                 editor.loadFileContent(editor_info['content'])
                             else:
                                 editor.setPlainText(editor_info['content'])
-                            cursor.endEditBlock()
                             editor.blockSignals(False)
 
                         # Restore cursor

@@ -696,12 +696,12 @@ class EditorManager:
             else:
                 editor.setAlignment(Qt.AlignLeft)
 
-            # Set content after alignment is established
-            if content:
-                if hasattr(editor, 'setContentSafely'):
-                    editor.setContentSafely(content)
-                else:
-                    editor.setPlainText(content)
+            # NOTE: the file content is loaded exactly ONCE, further below, after
+            # the highlighter has been created and detached.  It used to be loaded
+            # here as well, i.e. the whole document was built, highlighted and then
+            # thrown away and rebuilt a second time.  That second setPlainText() is
+            # where the Windows build crashed (access violation) while restoring the
+            # previous session at startup.
 
             editor.parent_editor_manager = self
 
@@ -782,20 +782,27 @@ class EditorManager:
                 # Detach highlighter from document during load
                 highlighter.setDocument(None)
 
-                cursor = editor.textCursor()
-                cursor.beginEditBlock()
+                # IMPORTANT: no cursor.beginEditBlock() around this call.
+                # loadFileContent() -> setPlainText() clears and rebuilds the whole
+                # document (including its undo stack).  Holding an external edit block
+                # open across that is not supported by Qt and corrupted the document
+                # (native crash on Windows 7 / Qt 5.15.2).  setPlainText() is already
+                # one atomic replacement, so the wrapper added nothing.
                 editor.loadFileContent(content)
-                cursor.endEditBlock()
-                editor.setTextCursor(cursor)
 
                 editor.blockSignals(False)
                 self._loading_file = False
 
                 # Reattach highlighter after load — deferred so UI renders first
                 def restore_highlighter(h=highlighter, e=editor):
-                    h.setDocument(e.document())
-                    # Incremental syntax highlight stays on main thread (fast, no I/O)
-                    h.rehighlight_incremental(chunk=50, delay=0)
+                    # Attach and highlight in the background, once, in short slices.
+                    # (A plain setDocument() makes Qt run an extra full-document
+                    # pass that freezes the window; see LaTeXHighlighter.attach_lazily.)
+                    if hasattr(h, 'attach_lazily'):
+                        h.attach_lazily(e.document())
+                    else:
+                        h.setDocument(e.document())
+                        h.rehighlight_incremental(chunk=50, delay=0)
                     # Async spell check — fires from the thread pool, result
                     # applied back on the main thread via QueuedConnection
                     mw = self.main_window

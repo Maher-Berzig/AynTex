@@ -1,6 +1,5 @@
+# errors_manager.py – Robust crash logging + freeze detection for PyQt5
 """
-errors_manager.py – Robust crash logging + freeze detection for PyQt5
-
 Key design decisions
 --------------------
 * No automatic popups.  All errors and freezes are silently logged; the user
@@ -210,7 +209,7 @@ class ErrorsManager:
             pass
 
         cls._logger = logging.getLogger("ErrorsManager")
-        cls._logger.setLevel(logging.DEBUG)
+        cls._logger.setLevel(logging.WARNING)
         cls._logger.propagate = False
 
         handler = RotatingFileHandler(
@@ -221,6 +220,7 @@ class ErrorsManager:
             encoding="utf-8",
             delay=False,
         )
+        handler.setLevel(logging.WARNING)
         handler.setFormatter(
             logging.Formatter(
                 "%(asctime)s [%(levelname)-8s] %(message)s",
@@ -268,7 +268,8 @@ class ErrorsManager:
                 self._buf  = ""
 
             def write(self, msg: str) -> None:
-                self._orig.write(msg)
+                if self._orig is not None:      # None in a windowed (no-console) exe
+                    self._orig.write(msg)
                 self._buf += msg
                 if "\n" in self._buf:
                     lines = self._buf.split("\n")
@@ -284,9 +285,12 @@ class ErrorsManager:
                     logger.error(self._buf.rstrip())
                     cls._has_errors = True
                     self._buf = ""
-                self._orig.flush()
+                if self._orig is not None:
+                    self._orig.flush()
 
             def __getattr__(self, name):
+                if self._orig is None:
+                    raise AttributeError(name)
                 return getattr(self._orig, name)
 
         sys.stderr = _TeeStderr(cls._original_stderr)
