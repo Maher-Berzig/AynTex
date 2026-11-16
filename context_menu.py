@@ -535,7 +535,7 @@ class ContextMenuManager:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 from PyQt5.QtCore import QObject, QEvent
-from PyQt5.QtWidgets import QTabWidget
+from PyQt5.QtWidgets import QTabWidget, QTabBar
 
 
 class _TabBarFilter(QObject):
@@ -573,7 +573,37 @@ class _TabBarFilter(QObject):
                 self._slot(obj, event.pos())
                 return True
         except RuntimeError:
-            pass   # underlying C++ object was destroyed mid-flight
+            # A C++ object was destroyed mid-flight.  Do not hide it: this was
+            # one reason the tab menu sometimes silently failed to appear.
+            import traceback
+            traceback.print_exc()
+            return True
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return True
+        return False
+
+
+class _PdfTabBarFallback(QObject):
+    """Application-wide safety net for PDF-pane tab bars.
+
+    Tools launched from the Tools menu may create a brand-new QTabWidget
+    (pdf_tabs) *after* the per-tab-bar _TabBarFilter objects were installed.
+    That tab bar then has no filter and the right-click menu is never shown.
+    This object sees the ContextMenu event first, installs the missing filter
+    on the spot and shows the menu.
+    """
+    def __init__(self, owner):
+        super().__init__(None)
+        self._owner = owner
+
+    def eventFilter(self, obj, event):
+        try:
+            if event.type() == QEvent.ContextMenu and isinstance(obj, QTabBar):
+                return self._owner._handle_unfiltered_bar(obj, event)
+        except RuntimeError:
+            pass
         return False
 
 
@@ -594,6 +624,7 @@ class TabContextMenu:
         # Keep references so the filters aren't garbage-collected
         self._filters = []
         self._pdf_filters = set()   # subset of _filters belonging to PDF tab bars
+        self._fallback = None       # application-level safety net (see below)
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -601,6 +632,42 @@ class TabContextMenu:
         """Install context menus on both editor and PDF tab bars."""
         self._install_editor_tabs()
         self._install_pdf_tabs()
+        if self._fallback is None:
+            app = QApplication.instance()
+            if app is not None:
+                self._fallback = _PdfTabBarFallback(self)
+                app.installEventFilter(self._fallback)
+
+    def _has_filter(self, tab_bar):
+        for f in self._filters:
+            if f._tab_bar is tab_bar:
+                return True
+        return False
+
+    def _is_pdf_pane_tab_widget(self, tw):
+        """True if *tw* is the tabbed PDF pane or a direct H/V splitter pane."""
+        pm = getattr(self.main_window, 'pdf_manager', None)
+        if pm is None or not isinstance(tw, QTabWidget):
+            return False
+        if tw is getattr(pm, 'pdf_tabs', None):
+            return True
+        splitter = getattr(pm, 'pdf_splitter', None)
+        if splitter is not None and tw.parent() is splitter:
+            return True
+        for data in getattr(pm, 'pdf_files', {}).values():
+            if isinstance(data, dict) and data.get('tab_widget') is tw:
+                return True
+        return False
+
+    def _handle_unfiltered_bar(self, tab_bar, event):
+        if self._has_filter(tab_bar):
+            return False                      # its own filter will handle it
+        tw = tab_bar.parent()
+        if not self._is_pdf_pane_tab_widget(tw):
+            return False
+        self._attach(tab_bar, self._show_pdf_menu, is_pdf=True)
+        self._show_pdf_menu(tab_bar, event.pos())
+        return True
 
     def reinstall(self):
         """Re-install after a layout switch that replaced ALL tab widgets."""
@@ -719,6 +786,8 @@ class TabContextMenu:
 
     def _attach(self, tab_bar, slot, is_pdf=False):
         """Attach an event-filter-based context menu to *tab_bar*."""
+        if self._has_filter(tab_bar):
+            return
         f = _TabBarFilter(tab_bar, slot)
         self._filters.append(f)     # keep alive
         if is_pdf:
@@ -1019,27 +1088,59 @@ class TabContextMenu:
         viewer   = None
 
         if hasattr(pm, 'pdf_files'):
-            for path, data in pm.pdf_files.items():
+            for path, data in list(pm.pdf_files.items()):
                 if not isinstance(data, dict):
                     continue
-                # H/V mode: match by the tab_widget object itself
-                if data.get('tab_widget') is tab_widget:
-                    pdf_path = path
-                    viewer   = data.get('viewer')
-                    break
-                # Tabbed mode: match by live indexOf (not stale 'index')
-                v = data.get('viewer')
-                if v is not None:
-                    live_idx = tab_widget.indexOf(v)
-                    if live_idx == tab_index:
+                # A stale entry (viewer/tab widget already deleted on the C++
+                # side) used to raise RuntimeError here, which the event
+                # filter swallowed -> the menu randomly did not appear.
+                try:
+                    # H/V mode: match by the tab_widget object itself
+                    if data.get('tab_widget') is tab_widget:
                         pdf_path = path
-                        viewer   = v
-                        data['index'] = live_idx   # keep cache in sync
+                        viewer   = data.get('viewer')
                         break
+                    # Tabbed mode: match by live indexOf (not stale 'index')
+                    v = data.get('viewer')
+                    if v is not None:
+                        live_idx = tab_widget.indexOf(v)
+                        if live_idx == tab_index:
+                            pdf_path = path
+                            viewer   = v
+                            data['index'] = live_idx   # keep cache in sync
+                            break
+                except RuntimeError:
+                    continue
 
-        # Final fallback: widget at that tab position
-        if viewer is None:
-            viewer = tab_widget.widget(tab_index)
+        # What is at this tab position?
+        #   * a PDF            -> pdf_path is set
+        #   * the empty-panel placeholder ("PDF Viewer"/"Welcome")
+        #   * anything else    -> a TOOL tab (Tools, BibTeX, DjVu, AI, ...)
+        # Previously "no pdf_path" was taken to mean "placeholder", so every
+        # tool tab got a fully disabled menu.
+        try:
+            tab_widget_obj = tab_widget.widget(tab_index)
+            tab_text = tab_widget.tabText(tab_index)
+            # is_placeholder = (
+                # tab_widget.objectName() == "pdf_welcome_tab"
+                # or (tab_widget_obj is not None
+                    # and tab_widget_obj.objectName() == "pdf_welcome_widget")
+                # or (pdf_path is None and tab_text in
+                    # ("Welcome", "PDF Viewer", "No PDFs", "No Pdfs"))
+            # )
+            is_placeholder = (
+                pdf_path is None
+                and (
+                    tab_text in ("Welcome", "PDF Viewer", "No PDFs", "No Pdfs")
+                    or (tab_widget_obj is not None
+                        and tab_widget_obj.objectName() == "pdf_welcome_widget")
+                )
+            )
+        except RuntimeError:
+            return
+        has_pdf = pdf_path is not None
+        if not has_pdf:
+            viewer = None          # a tool widget is not a PDF viewer
 
         menu = QMenu(tab_bar)
 
@@ -1052,7 +1153,7 @@ class TabContextMenu:
         menu.addSeparator()
 
         # ── Open PDF (always available, even when welcome tab is shown) ───
-        is_welcome = pdf_path is None   # True when the panel is empty / on welcome tab
+        is_welcome = is_placeholder   # True only when the panel is empty / on welcome tab
         open_act = QAction("Open PDF…", menu)
         open_act.triggered.connect(
             lambda: pm.open_pdf_file() if hasattr(pm, 'open_pdf_file') else None
@@ -1086,8 +1187,7 @@ class TabContextMenu:
         close_act = QAction("Close", menu)
         close_act.setEnabled(not is_welcome)
         close_act.triggered.connect(
-            lambda: pm.close_pdf_tab(tab_index)
-            if hasattr(pm, 'close_pdf_tab') else None
+            lambda: self._pdf_pane_close(pm, tab_widget, tab_index)
         )
         self._icon(close_act, 'close_pdf')
         menu.addAction(close_act)
@@ -1137,7 +1237,7 @@ class TabContextMenu:
 
         # ── print ─────────────────────────────────────────────────────────
         print_act = QAction("Print…", menu)
-        print_act.setEnabled(not is_welcome and viewer is not None and hasattr(viewer, 'print_pdf'))
+        print_act.setEnabled(has_pdf and viewer is not None and hasattr(viewer, 'print_pdf'))
         print_act.triggered.connect(lambda: viewer.print_pdf() if viewer else None)
         self._icon(print_act, 'print')
         menu.addAction(print_act)
@@ -1154,7 +1254,7 @@ class TabContextMenu:
             layout_menu.addAction(act)
 
         zoom_in_act = QAction("Zoom In", menu)
-        zoom_in_act.setEnabled(not is_welcome and viewer is not None)
+        zoom_in_act.setEnabled(has_pdf and viewer is not None)
         zoom_in_act.triggered.connect(
             lambda: viewer.zoom_in() if viewer and hasattr(viewer, 'zoom_in') else None
         )
@@ -1162,7 +1262,7 @@ class TabContextMenu:
         menu.addAction(zoom_in_act)
 
         zoom_out_act = QAction("Zoom Out", menu)
-        zoom_out_act.setEnabled(not is_welcome and viewer is not None)
+        zoom_out_act.setEnabled(has_pdf and viewer is not None)
         zoom_out_act.triggered.connect(
             lambda: viewer.zoom_out() if viewer and hasattr(viewer, 'zoom_out') else None
         )
@@ -1170,7 +1270,7 @@ class TabContextMenu:
         menu.addAction(zoom_out_act)
 
         fit_width_act = QAction("Fit to Page Width", menu)
-        fit_width_act.setEnabled(not is_welcome and viewer is not None)
+        fit_width_act.setEnabled(has_pdf and viewer is not None)
         fit_width_act.triggered.connect(
             lambda: viewer.fit_page_width() if viewer and hasattr(viewer, 'fit_page_width') else None
         )
@@ -1179,7 +1279,7 @@ class TabContextMenu:
         menu.addAction(fit_width_act)
 
         fit_page_act = QAction("Fit Page to Window", menu)
-        fit_page_act.setEnabled(not is_welcome and viewer is not None)
+        fit_page_act.setEnabled(has_pdf and viewer is not None)
         fit_page_act.triggered.connect(
             lambda: viewer.fit_page_to_window() if viewer and hasattr(viewer, 'fit_page_to_window') else None
         )
@@ -1192,14 +1292,14 @@ class TabContextMenu:
         move_left_act = QAction("Move Tab Left", menu)
         move_left_act.setEnabled(tab_index > 0)
         move_left_act.triggered.connect(
-            lambda: tab_widget.tabBar().moveTab(tab_index, tab_index - 1)
+            lambda: self._pdf_pane_move_tab(pm, tab_widget, tab_index, tab_index - 1)
         )
         menu.addAction(move_left_act)
 
         move_right_act = QAction("Move Tab Right", menu)
         move_right_act.setEnabled(tab_index < tab_widget.count() - 1)
         move_right_act.triggered.connect(
-            lambda: tab_widget.tabBar().moveTab(tab_index, tab_index + 1)
+            lambda: self._pdf_pane_move_tab(pm, tab_widget, tab_index, tab_index + 1)
         )
         menu.addAction(move_right_act)
 
@@ -1437,10 +1537,74 @@ class TabContextMenu:
                     "Save Failed",
                     f"Could not save PDF:\n{str(e)}"
                 )
+    def _pdf_pane_is_pdf_tab(self, pm, tab_widget, index):
+        """True if the tab at *index* holds a PDF viewer tracked by pm."""
+        w = tab_widget.widget(index)
+        for data in list(getattr(pm, 'pdf_files', {}).values()):
+            try:
+                if isinstance(data, dict) and (
+                        data.get('viewer') is w or data.get('tab_widget') is tab_widget):
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def _pdf_pane_close(self, pm, tab_widget, index):
+        """Close one tab of the PDF pane (PDF *or* tool)."""
+        if not hasattr(pm, 'close_pdf_tab') or index < 0 or index >= tab_widget.count():
+            return
+        # H/V mode: close_pdf_tab expects the SPLITTER index of the pane
+        if getattr(pm, 'pdf_layout_mode', 'tabbed') != 'tabbed':
+            splitter = getattr(pm, 'pdf_splitter', None)
+            w = tab_widget
+            while splitter is not None and w is not None and w.parent() is not splitter:
+                w = w.parent()
+            if splitter is not None and w is not None:
+                pm.close_pdf_tab(splitter.indexOf(w))
+            return
+        if self._pdf_pane_is_pdf_tab(pm, tab_widget, index):
+            pm.close_pdf_tab(index)
+            return
+        # Tool tab: remove it directly.  pm.close_pdf_tab only knows a fixed
+        # list of (untranslated) tool names and would otherwise try to match
+        # the tab against a PDF through stale cached indexes.
+        name = tab_widget.tabText(index)
+        widget = tab_widget.widget(index)
+        tab_widget.removeTab(index)
+        if widget is not None:
+            widget.setParent(None)
+            widget.deleteLater()
+        mw = self.main_window
+        if name == "PDF Comparison":
+            if getattr(mw, '_pdf_expanded', False):
+                mw.toggle_pdf_expand_width()
+            if hasattr(mw, 'output_tabs_visible') and not mw.output_tabs_visible:
+                mw.toggle_output_tabs()
+        if tab_widget.count() == 0 and hasattr(pm, '_show_pdf_welcome_tab'):
+            pm._show_pdf_welcome_tab()
+
     def _pdf_close_others(self, pm, tab_widget, keep_index):
+        # Close from the right-most tab down so indexes stay valid; the tab
+        # we keep is identified by its widget, not by an index that shifts.
+        keep_widget = tab_widget.widget(keep_index)
         for i in range(tab_widget.count() - 1, -1, -1):
-            if i != keep_index and hasattr(pm, 'close_pdf_tab'):
-                pm.close_pdf_tab(i)
+            if tab_widget.widget(i) is keep_widget:
+                continue
+            self._pdf_pane_close(pm, tab_widget, i)
+
+    def _pdf_pane_move_tab(self, pm, tab_widget, src, dst):
+        """Move a tab and re-sync pdf_manager's cached tab indexes."""
+        if not (0 <= src < tab_widget.count() and 0 <= dst < tab_widget.count()):
+            return
+        tab_widget.tabBar().moveTab(src, dst)
+        for data in list(getattr(pm, 'pdf_files', {}).values()):
+            try:
+                if isinstance(data, dict) and data.get('viewer') is not None:
+                    idx = tab_widget.indexOf(data['viewer'])
+                    if idx >= 0:
+                        data['index'] = idx
+            except RuntimeError:
+                continue
 
     def _get_viewer_for_pdf(self, pm, pdf_path):
         if not hasattr(pm, 'pdf_files'):
@@ -1545,4 +1709,3 @@ class TabContextMenu:
         im = getattr(self.main_window, 'icons_manager', None)
         if im and hasattr(im, 'apply_icon_to_action'):
             im.apply_icon_to_action(action, name)
-
