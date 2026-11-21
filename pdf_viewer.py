@@ -939,7 +939,10 @@ class PDFViewer(QWidget):
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         # Make scroll area expand to fill available space
         self.scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.scroll_area.setMinimumSize(300, 400)  # Reasonable minimum size
+        # Keep this small: in H/V layouts several viewers share the pane, and a
+        # large hard minimum made each viewer taller than its pane, so its
+        # bottom (lower scrollbar arrow + handle) was clipped.
+        self.scroll_area.setMinimumSize(100, 60)
         self.scroll_area.verticalScrollBar().valueChanged.connect(self.on_scroll_changed)
         
         # ✅ NEW: Prevent scrollbars from stealing focus

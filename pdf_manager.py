@@ -714,6 +714,12 @@ class PDFManager:
             if bring_to_front:
                 viewer.setFocus()
                 self._ensure_pdf_widget_focus(viewer)
+            # Re-layout all panes once the new one is shown (stale scroll bars)
+            lm = getattr(self.main_window, 'layout_manager', None)
+            if lm is not None and hasattr(lm, 'refresh_pdf_pane_geometry'):
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(0, lm.refresh_pdf_pane_geometry)
+                QTimer.singleShot(150, lm.refresh_pdf_pane_geometry)
 
         # Store PDF data
         pdf_type = 'tex_generated' if self._is_tex_generated_pdf(pdf_path) else 'external'
@@ -1099,7 +1105,7 @@ class PDFManager:
 
         try:
             if not os.path.exists(file_path):
-                print(f"❌ Recent PDF file not found: {file_path}")
+                #print(f"❌ Recent PDF file not found: {file_path}")
                 if hasattr(self.main_window, 'config_manager'):
                     self.main_window.config_manager.remove_recent_pdf_file(file_path)
                     if hasattr(self.main_window, 'menu_manager'):
@@ -1797,7 +1803,9 @@ class PDFManager:
         
         
         tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        tab_widget.setMinimumSize(200, 150)
+        # No explicit minimum: let it follow its content so the viewer is
+        # never laid out taller than the pane (that clipped the scrollbar).
+        tab_widget.setMinimumSize(0, 0)
         tab_widget.setFocusPolicy(Qt.NoFocus)
         
         # ✅ Focus policies - viewer should have strong focus
@@ -1816,7 +1824,7 @@ class PDFManager:
         
         # Set wrapper properties
         wrapper.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        wrapper.setMinimumSize(250, 250)
+        wrapper.setMinimumSize(0, 0)   # content-driven (see tab_widget above)
         wrapper.setFocusPolicy(Qt.NoFocus)
         
         # Ensure visibility

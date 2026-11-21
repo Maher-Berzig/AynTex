@@ -1566,9 +1566,21 @@ class LayoutManager:
             elif splitter is not None:
                 for i in range(splitter.count()):
                     wrapper = splitter.widget(i)
+                    # A pane is either a bare QTabWidget (built by a layout
+                    # switch) or a QWidget wrapper holding one (built when a PDF
+                    # is opened while already in H/V mode).  Count both: missing
+                    # the second kind made the item count too low, so closing a
+                    # tab with 3+ open fell back to tabbed mode.
                     if isinstance(wrapper, QTabWidget):
-                        for j in range(wrapper.count()):
-                            classify(wrapper, j)
+                        panes = [wrapper]
+                    elif wrapper is not None:
+                        panes = wrapper.findChildren(
+                            QTabWidget, options=Qt.FindDirectChildrenOnly)
+                    else:
+                        panes = []
+                    for tw in panes:
+                        for j in range(tw.count()):
+                            classify(tw, j)
         except RuntimeError:
             pass  # a Qt widget was already deleted
 
@@ -2143,7 +2155,7 @@ class LayoutManager:
                     tab_widget.setTabsClosable(True)
                     tab_widget.tabCloseRequested.connect(pm.close_pdf_tab_by_signal)
                     tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                    tab_widget.setMinimumSize(200, 150)
+                    tab_widget.setMinimumSize(0, 0)
                     if it['kind'] == 'pdf':
                         pdf_path = it['path']
                         viewer = current_pdfs[pdf_path]['viewer']
@@ -2201,6 +2213,11 @@ class LayoutManager:
             new_pdf_widget.show()
             new_pdf_widget.update()
             self.pdf_container.update()
+            # H/V: panes are built while updates are suppressed and before the
+            # splitter has its final size, so scroll bars can stay half-laid-out
+            # until the next resize.  Force that relayout ourselves.
+            QTimer.singleShot(0, self.refresh_pdf_pane_geometry)
+            QTimer.singleShot(150, self.refresh_pdf_pane_geometry)
 
             #print(f"PDF container recreation complete with {len(current_pdfs)} PDFs restored")
         except Exception as e:
@@ -2208,6 +2225,40 @@ class LayoutManager:
             import traceback
             traceback.print_exc()
                     
+    def refresh_pdf_pane_geometry(self):
+        """Force a full relayout of every H/V PDF pane (what a manual resize does)."""
+        try:
+            pm = self.main_window.pdf_manager
+            sp = getattr(pm, 'pdf_splitter', None)
+            if sp is None:
+                return
+            sp.refresh()
+            for i in range(sp.count()):
+                pane = sp.widget(i)
+                if pane is None:
+                    continue
+                if pane.layout() is not None:
+                    pane.layout().activate()
+                for w in pane.findChildren(QWidget):
+                    lay = w.layout()
+                    if lay is not None:
+                        lay.activate()
+                for sa in pane.findChildren(QScrollArea):
+                    # setViewportMargins() re-runs the scroll area's own
+                    # layoutChildren(): scroll bars, arrows and corner widget
+                    sa.setViewportMargins(0, 0, 0, 0)
+                    for sb in (sa.verticalScrollBar(), sa.horizontalScrollBar()):
+                        st = sb.style()
+                        st.unpolish(sb)
+                        st.polish(sb)
+                        sb.update()
+                    sa.viewport().update()
+                pane.updateGeometry()
+                pane.update()
+            sp.update()
+        except RuntimeError:
+            pass   # a pane was destroyed while the timer was pending
+
     def get_layout_status(self):
         """Get current layout status for status bar"""
         layout_text = self.main_window.translations[self.main_window.menu_language]["status_layout_editor_left"]
