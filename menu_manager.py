@@ -1562,6 +1562,43 @@ class MenuManager:
             status = "shown" if checked else "hidden"
             self.main_window.statusBar().showMessage(f"Line numbers {status}", 2000)
 
+    def _set_global_menu_shortcuts(self, enabled):
+        """Keep menu shortcuts (F9, Ctrl+F7, Ctrl+F8, ...) working while the
+        menu bar is hidden.
+
+        Qt only fires an action's shortcut if one of the widgets the action is
+        attached to is visible.  Menu actions live only inside the menu bar, so
+        hiding it silently disabled every menu shortcut.  While hidden we
+        attach the very same QAction objects to the main window as well (no
+        duplicates, so no ambiguous shortcuts); when the bar is shown again we
+        detach them so normal behaviour is unchanged.
+        """
+        mw = self.main_window
+        registered = getattr(self, '_global_shortcut_actions', [])
+        for act in registered:
+            try:
+                mw.removeAction(act)
+            except RuntimeError:
+                pass
+        registered = []
+        if enabled:
+            seen = set()
+
+            def walk(actions):
+                for act in actions:
+                    if id(act) in seen:
+                        continue
+                    seen.add(id(act))
+                    sub = act.menu()
+                    if sub is not None:
+                        walk(sub.actions())
+                    elif not act.isSeparator() and not act.shortcut().isEmpty():
+                        mw.addAction(act)
+                        registered.append(act)
+
+            walk(mw.menuBar().actions())
+        self._global_shortcut_actions = registered
+
     def toggle_menu_bar(self):
         """Toggle menu bar visibility"""
         menu_bar = self.main_window.menuBar()
@@ -1569,6 +1606,8 @@ class MenuManager:
         new_state = not current_state
         # Toggle visibility
         menu_bar.setVisible(new_state)
+        # Hidden bar => its shortcuts must be attached to the window instead
+        self._set_global_menu_shortcuts(not new_state)
         # Update action checked state
         if hasattr(self.main_window, 'toggle_menubar_action'):
             self.main_window.toggle_menubar_action.setChecked(new_state)
@@ -2332,7 +2371,7 @@ class MenuManager:
         from PyQt5.QtCore import Qt
 
         if not os.path.exists(file_path):
-            #print(f"❌ Recent PDF file not found: {file_path}")
+            print(f"❌ Recent PDF file not found: {file_path}")
             if hasattr(self.main_window, 'config_manager'):
                 self.main_window.config_manager.remove_recent_pdf_file(file_path)
                 if hasattr(self.main_window, 'menu_manager'):

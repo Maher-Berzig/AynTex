@@ -759,6 +759,8 @@ class MainWindow(QMainWindow):
             try:
                 menubar_visible = self.config_manager.get_config_value('ui', 'menubar_visible', default=True)
                 self.menuBar().setVisible(menubar_visible)
+                if hasattr(self, 'menu_manager'):
+                    self.menu_manager._set_global_menu_shortcuts(not menubar_visible)
                 
                 # Update action state
                 if hasattr(self, 'toggle_menubar_action'):
@@ -2842,41 +2844,59 @@ class MainWindow(QMainWindow):
             # if hasattr(self, 'menu_pdf_toolbar_toggle_action'):
                 # self.menu_pdf_toolbar_toggle_action.setChecked(new_state)
 
+    def _find_djvu_tab(self):
+        """Return (djvu_widget, (tab_widget, index) or None) in tabbed or H/V mode."""
+        pm = getattr(self, 'pdf_manager', None)
+        if pm is None:
+            return None, None
+
+        def is_djvu(w):
+            return (w is not None and hasattr(w, 'toggle_toolbar')
+                    and hasattr(w, 'toolbar_visible'))
+
+        try:
+            tabs = getattr(pm, 'pdf_tabs', None)
+            if isinstance(tabs, QTabWidget):
+                for i in range(tabs.count()):
+                    w = tabs.widget(i)
+                    if is_djvu(w):
+                        return w, (tabs, i)
+                return None, None
+            # H/V mode: every item lives in its own pane inside the splitter
+            splitter = getattr(pm, 'pdf_splitter', None)
+            if splitter is not None:
+                for w in splitter.findChildren(QWidget):
+                    if is_djvu(w):
+                        return w, None
+        except RuntimeError:
+            pass
+        return None, None
+
     def _bring_djvu_to_foreground(self):
-        """Bring the DjVu tab to the foreground if it exists."""
-        if not hasattr(self, 'pdf_manager') or not self.pdf_manager:
+        """Bring the DjVu tab to the foreground if it exists (any layout mode)."""
+        widget, where = self._find_djvu_tab()
+        if widget is None:
             return False
-        tab_widget = self.pdf_manager.pdf_tabs
-        if not tab_widget:
-            return False
-        
-        # Find the DjVu tab by checking each widget for the 'toggle_toolbar' method
-        for i in range(tab_widget.count()):
-            widget = tab_widget.widget(i)
-            if widget and hasattr(widget, 'toggle_toolbar'):  # DjvuTab has this
-                tab_widget.setCurrentIndex(i)
-                widget.setFocus()
-                return True
-        return False
+        if where is not None:
+            where[0].setCurrentIndex(where[1])
+        widget.setFocus()
+        return True
 
     def toggle_djvu_toolbar(self):
-        """Toggle DjVu viewer toolbar visibility for the current DjVu tab."""
-        # First, bring DjVu tab to foreground if it exists
-        if not self._bring_djvu_to_foreground():
+        """Toggle DjVu viewer toolbar visibility (tabbed and H/V modes)."""
+        widget, where = self._find_djvu_tab()
+        if widget is None:
             return  # No DjVu tab open
-        
-        # Now get the current (now active) tab
-        if not hasattr(self, 'pdf_manager') or not self.pdf_manager:
-            return
-        tab_widget = self.pdf_manager.pdf_tabs
-        if not tab_widget:
-            return
-        current = tab_widget.currentWidget()
-        if current and hasattr(current, 'toggle_toolbar'):
-            current.toggle_toolbar()
-            # Sync menu checkmark
-            if hasattr(self, 'menu_djvu_toolbar_toggle_action'):
-                self.menu_djvu_toolbar_toggle_action.setChecked(current.toolbar_visible)
+        if where is not None:
+            where[0].setCurrentIndex(where[1])
+        widget.setFocus()
+        widget.toggle_toolbar()
+        # Sync menu checkmark (without re-triggering)
+        if hasattr(self, 'menu_djvu_toolbar_toggle_action'):
+            act = self.menu_djvu_toolbar_toggle_action
+            act.blockSignals(True)
+            act.setChecked(widget.toolbar_visible)
+            act.blockSignals(False)
 
                 
     def restore_menubar_state(self):
@@ -2885,6 +2905,8 @@ class MainWindow(QMainWindow):
             try:
                 menubar_visible = self.config_manager.get_config_value('ui', 'menubar_visible', default=True)
                 self.menuBar().setVisible(menubar_visible)
+                if hasattr(self, 'menu_manager'):
+                    self.menu_manager._set_global_menu_shortcuts(not menubar_visible)
                 
                 # Update action state
                 if hasattr(self, 'toggle_menubar_action'):
